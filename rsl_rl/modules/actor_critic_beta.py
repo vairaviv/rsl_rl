@@ -21,8 +21,9 @@ class ActorCriticBeta(nn.Module):
         actor_hidden_dims=[256, 256, 256],
         critic_hidden_dims=[256, 256, 256],
         activation="elu",
-        beta_scale=1.0,     # scale width of beta distribution [0,1]*scale
-        beta_shift=0.0,     # shift of beta distribution [0,1]+shift
+        beta_initial_logit=0.5,  # centered mean intially
+        beta_initial_scale=5.0,  # sharper distribution initially
+
         **kwargs,
     ):
         if kwargs:
@@ -66,8 +67,8 @@ class ActorCriticBeta(nn.Module):
         self.distribution = Beta(1, 1)
         self.soft_plus = torch.nn.Softplus(beta=1)
         self.sigmoid = nn.Sigmoid()
-        self.beta_scale = beta_scale
-        self.beta_shift = beta_shift
+        self.beta_initial_logit_shift = math.log(beta_initial_logit/(1.0-beta_initial_logit)) # inverse sigmoid
+        self.beta_initial_scale = beta_initial_scale
 
         # disable args validation for speedup
         Beta.set_default_validate_args = False
@@ -88,15 +89,15 @@ class ActorCriticBeta(nn.Module):
     
     @property
     def std(self):
-        return self.distribution.stddev * self.beta_scale
+        return self.distribution.stddev
 
     @property
     def action_mean(self):
-        return self.distribution.mean + self.beta_shift
+        return self.distribution.mean
 
     @property
     def action_std(self):
-        return self.distribution.stddev * self.beta_scale
+        return self.distribution.stddev
 
     @property
     def entropy(self):
@@ -104,8 +105,8 @@ class ActorCriticBeta(nn.Module):
     
     def get_beta_parameters(self, logits):
         """Get alpha and beta parameters from logits"""
-        ratio = self.sigmoid(logits[:, :self.output_dim])       # alpha/(alpha+beta) --> Range: [0, 1] (Mean)
-        sum = (self.soft_plus(logits[:, self.output_dim:]) + 1) # alhpa+beta --> inverse variance
+        ratio = self.sigmoid(logits[:, :self.output_dim] + self.beta_initial_logit_shift) # alpha/(alpha+beta) --> Mean
+        sum = (self.soft_plus(logits[:, self.output_dim:]) + 1) * self.beta_initial_scale # alhpa+beta --> inverse variance
         alpha = ratio * sum
         beta = sum - alpha
         return alpha, beta
@@ -117,14 +118,14 @@ class ActorCriticBeta(nn.Module):
 
     def act(self, observations, **kwargs):
         self.update_distribution(observations)
-        return self.distribution.sample() * self.beta_scale + self.beta_shift
+        return self.distribution.sample()
 
     def get_actions_log_prob(self, actions):
         return self.distribution.log_prob(actions).sum(dim=-1)
 
     def act_inference(self, observations):
         actions_mean = self.actor(observations)
-        return actions_mean * self.beta_scale + self.beta_shift
+        return actions_mean
 
     def evaluate(self, critic_observations, **kwargs):
         value = self.critic(critic_observations)
