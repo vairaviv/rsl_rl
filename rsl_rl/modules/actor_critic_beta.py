@@ -42,7 +42,7 @@ class ActorCriticBeta(nn.Module):
         actor_layers.append(activation)
         for layer_index in range(len(actor_hidden_dims)):
             if layer_index == len(actor_hidden_dims) - 1:
-                actor_layers.append(nn.Linear(actor_hidden_dims[layer_index], num_actions))
+                actor_layers.append(nn.Linear(actor_hidden_dims[layer_index], 2*num_actions)) # 2*num_actions for mean and entropy
             else:
                 actor_layers.append(nn.Linear(actor_hidden_dims[layer_index], actor_hidden_dims[layer_index + 1]))
                 actor_layers.append(activation)
@@ -69,6 +69,7 @@ class ActorCriticBeta(nn.Module):
         self.sigmoid = nn.Sigmoid()
         self.beta_initial_logit_shift = math.log(beta_initial_logit/(1.0-beta_initial_logit)) # inverse sigmoid
         self.beta_initial_scale = beta_initial_scale
+        self.output_dim = num_actions
 
         # disable args validation for speedup
         Beta.set_default_validate_args = False
