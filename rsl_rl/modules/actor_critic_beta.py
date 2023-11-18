@@ -125,7 +125,8 @@ class ActorCriticBeta(nn.Module):
         return self.distribution.log_prob(actions).sum(dim=-1)
 
     def act_inference(self, observations):
-        actions_mean = self.actor(observations)
+        logits = self.actor(observations)
+        actions_mean = self.sigmoid(logits[:, :self.output_dim] + self.beta_initial_logit_shift)
         return actions_mean
 
     def evaluate(self, critic_observations, **kwargs):
