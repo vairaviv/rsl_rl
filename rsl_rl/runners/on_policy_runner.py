@@ -13,7 +13,7 @@ from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 import rsl_rl
 from rsl_rl.algorithms import PPO
 from rsl_rl.env import VecEnv
-from rsl_rl.modules import ActorCritic, ActorCriticRecurrent, ActorCriticBeta, EmpiricalNormalization
+from rsl_rl.modules import ActorCritic, ActorCriticRecurrent, ActorCriticBeta, ActorCriticRecurrentBeta, EmpiricalNormalization
 from rsl_rl.utils import store_code_state
 
 
@@ -32,8 +32,8 @@ class OnPolicyRunner:
             num_critic_obs = extras["observations"]["critic"].shape[1]
         else:
             num_critic_obs = num_obs
-        actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic | ActorCriticRecurrent | ActorCriticBeta
-        actor_critic: ActorCritic | ActorCriticRecurrent | ActorCriticBeta = actor_critic_class(
+        actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic | ActorCriticRecurrent | ActorCriticBeta | ActorCriticRecurrentBeta
+        actor_critic: ActorCritic | ActorCriticRecurrent | ActorCriticBeta | ActorCriticRecurrentBeta= actor_critic_class(
             num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
         ).to(self.device)
         alg_class = eval(self.alg_cfg.pop("class_name"))  # PPO

@@ -105,9 +105,14 @@ class ActorCriticBeta(nn.Module):
         return self.distribution.entropy().sum(dim=-1)
     
     def get_beta_parameters(self, logits):
-        """Get alpha and beta parameters from logits"""
-        ratio = self.sigmoid(logits[:, :self.output_dim] + self.beta_initial_logit_shift) # alpha/(alpha+beta) --> Mean
-        sum = (self.soft_plus(logits[:, self.output_dim:]) + 1) * self.beta_initial_scale # alhpa+beta --> inverse variance
+        """Get alpha and beta parameters from logits
+        NOTE: usually logits has dimensions (batch_size, 2*output_dim), but when using recurrent architecture
+        we have after the rollout a tensor of shape (steps_per_env, 2, 2*output_dim)
+        """
+        ratio = self.sigmoid(logits[..., :self.output_dim] + self.beta_initial_logit_shift)
+        sum = (self.soft_plus(logits[..., self.output_dim:]) + 1) * self.beta_initial_scale
+
+        # Compute alpha and beta
         alpha = ratio * sum
         beta = sum - alpha
         return alpha, beta
