@@ -8,6 +8,7 @@ import torch.nn as nn
 
 from rsl_rl.modules.actor_critic_beta import ActorCriticBeta, get_activation
 from rsl_rl.utils import unpad_trajectories
+from rsl_rl.modules.s4.s4_rnn import S4Model as S4D
 
 
 class ActorCriticRecurrentBeta(ActorCriticBeta):
@@ -99,3 +100,23 @@ class Memory(torch.nn.Module):
         # When the RNN is an LSTM, self.hidden_states_a is a list with hidden_state and cell_state
         for hidden_state in self.hidden_states:
             hidden_state[..., dones, :] = 0.0
+
+
+# NOTE: reset as a bit tricky with S4, because we need to reset the states to None
+class MemoryBlockS4(nn.Module):
+    def __init__(self, input_size, type="s4", num_layers=1, hidden_size=256):
+        super().__init__()
+        
+        self.rnn = S4D(input_size, hidden_size, num_layers=num_layers, batch_first=True, keep_states=True)
+        self.hidden_states = None
+    
+    def forward(self, input, masks=None, hidden_states=None):
+        input = input.unsqueeze(1) if input.dim() == 2 else input
+
+        out, self.hidden_states = self.rnn(input, self.hidden_states)
+        return out.squeeze()
+    
+    def reset(self, dones=None):
+        # When the RNN is an LSTM, self.hidden_states_a is a list with hidden_state and cell_state
+        for hidden_state in self.hidden_states:
+            hidden_state[dones] = 0.0
