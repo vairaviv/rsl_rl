@@ -10,7 +10,7 @@ setup(
     author="ETH Zurich, NVIDIA CORPORATION",
     maintainer="Nikita Rudin, David Hoeller",
     maintainer_email="rudinn@ethz.ch",
-    url="https://github.com/leggedrobotics/rsl_rl",
+    url="https://github.com/Passutte/rsl_rl",
     license="BSD-3",
     description="Fast and simple RL algorithms implemented in pytorch",
     python_requires=">=3.6",
