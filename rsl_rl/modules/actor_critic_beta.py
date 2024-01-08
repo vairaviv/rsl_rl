@@ -120,7 +120,14 @@ class ActorCriticBeta(nn.Module):
     def update_distribution(self, observations):
         logits = self.actor(observations)
         alpha, beta = self.get_beta_parameters(logits)
-        self.distribution = Beta(alpha, beta)
+        try:
+            self.distribution = Beta(alpha, beta)
+        except:
+            print("[WARNING] Beta distribution update failed, clamping alpha and beta to 1e-6")
+            #Enfore alpha and beta to be greater than 0....
+            alpha = torch.clamp(alpha, min=1e-6)
+            beta = torch.clamp(beta, min=1e-6)
+            self.distribution = Beta(alpha, beta)
 
     def act(self, observations, **kwargs):
         self.update_distribution(observations)
