@@ -127,6 +127,11 @@ class ActorCriticBeta(nn.Module):
             #Enfore alpha and beta to be greater than 0....
             alpha = torch.clamp(alpha, min=1e-6)
             beta = torch.clamp(beta, min=1e-6)
+            #Check for nans 
+            if torch.isnan(alpha).any() or torch.isnan(beta).any():
+                print("[WARNING] Alpha or Beta is nan, setting to 1e-6")
+                alpha = torch.nan_to_num(alpha, nan=1e-6)
+                beta = torch.nan_to_num(beta, nan=1e-6)
             self.distribution = Beta(alpha, beta)
 
     def act(self, observations, **kwargs):
