@@ -105,34 +105,27 @@ class ActorCriticBeta(nn.Module):
         return self.distribution.entropy().sum(dim=-1)
     
     def get_beta_parameters(self, logits):
-        """Get alpha and beta parameters from logits
-        NOTE: usually logits has dimensions (batch_size, 2*output_dim), but when using recurrent architecture
-        we have after the rollout a tensor of shape (steps_per_env, 2, 2*output_dim)
-        """
+        """Get alpha and beta parameters from logits"""
         ratio = self.sigmoid(logits[..., :self.output_dim] + self.beta_initial_logit_shift)
         sum = (self.soft_plus(logits[..., self.output_dim:]) + 1) * self.beta_initial_scale
 
         # Compute alpha and beta
         alpha = ratio * sum
         beta = sum - alpha
+
+        # Nummerical stability
+        alpha += 1e-6
+        beta += 1e-6
         return alpha, beta
 
     def update_distribution(self, observations):
+        """Update the distribution of the policy"""
         logits = self.actor(observations)
         alpha, beta = self.get_beta_parameters(logits)
-        try:
-            self.distribution = Beta(alpha, beta)
-        except:
-            print("[WARNING] Beta distribution update failed, clamping alpha and beta to 1e-6")
-            #Enfore alpha and beta to be greater than 0....
-            alpha = torch.clamp(alpha, min=1e-6)
-            beta = torch.clamp(beta, min=1e-6)
-            #Check for nans 
-            if torch.isnan(alpha).any() or torch.isnan(beta).any():
-                print("[WARNING] Alpha or Beta is nan, setting to 1e-6")
-                alpha = torch.nan_to_num(alpha, nan=1e-6)
-                beta = torch.nan_to_num(beta, nan=1e-6)
-            self.distribution = Beta(alpha, beta)
+
+        # Update distribution
+        self.distribution = Beta(alpha, beta)
+
 
     def act(self, observations, **kwargs):
         self.update_distribution(observations)
