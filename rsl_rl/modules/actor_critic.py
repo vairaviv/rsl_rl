@@ -116,6 +116,61 @@ class ActorCritic(nn.Module):
         return value
 
 
+class ActorCriticSeparate(nn.Module):
+    is_recurrent = False
+
+    def __init__(
+        self,
+        actor_model,
+        critic_model,
+        actor_distribution,
+        **kwargs,
+    ):
+        if kwargs:
+            print(
+                "ActorCritic.__init__ got unexpected arguments, which will be ignored: "
+                + str([key for key in kwargs.keys()])
+            )
+        super(ActorCriticSeparate, self).__init__()
+
+        # Policy
+        self.actor = actor_model
+        self.distribution = actor_distribution
+        # Value function
+        self.critic = critic_model
+
+    def reset(self, dones=None):
+        pass
+
+    def forward(self):
+        raise NotImplementedError
+
+    @property
+    def entropy(self):
+        return self.distribution.entropy()
+    
+    def act(self, observations, **kwargs):
+        logits = self.actor(observations)
+        actions, log_prob = self.distribution.sample(logits)
+        return actions, log_prob
+
+    def get_actions_log_prob(self, actions):
+        return self.distribution.log_prob(actions)
+
+    def act_inference(self, observations):
+        logits = self.actor(observations)
+        return self.distribution.mean(logits)
+
+    def evaluate(self, critic_observations, **kwargs):
+        if self.critic is None:
+            return None
+        value = self.critic(critic_observations)
+        return value
+
+    def log_info(self):
+        return self.distribution.log_info()
+    
+    
 def get_activation(act_name):
     if act_name == "elu":
         return nn.ELU()

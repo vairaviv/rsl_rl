@@ -1,61 +1,78 @@
 #  Copyright 2021 ETH Zurich, NVIDIA CORPORATION
 #  SPDX-License-Identifier: BSD-3-Clause
 
-from __future__ import annotations
-
+# python
 import os
-import statistics
 import time
-import torch
+import statistics
 from collections import deque
+
 from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 
+# torch
+import torch
+
+# rsl-rl
 import rsl_rl
-from rsl_rl.algorithms import PPO
-from rsl_rl.env import VecEnv
+from rsl_rl.algorithms import PPOBeta
 from rsl_rl.modules import ActorCritic, ActorCriticRecurrent, ActorCriticBeta, EmpiricalNormalization, ActorCriticSeparate, SimpleNavPolicy
+from rsl_rl.env import VecEnv
 from rsl_rl.utils import store_code_state
+
 from rsl_rl.distribution.beta_distribution import BetaDistribution
 
-
-class OnPolicyRunner:
-    """On-policy runner for training and evaluation."""
-
+# JL: THIS DOES NOT SUPPORT ASYMMETRIC AC MODELS
+# JL: THIS ONLY WORKS WITH TEACHER_STUDENT SETUP IN WHEELED_LEGGED_ENV
+class OnPolicyCurriculumRunner:
     def __init__(self, env: VecEnv, train_cfg, log_dir=None, device="cpu"):
         self.cfg = train_cfg
         self.alg_cfg = train_cfg["algorithm"]
         self.policy_cfg = train_cfg["policy"]
         self.device = device
         self.env = env
+        self.empirical_normalization = self.cfg["empirical_normalization"]
+
         obs, extras = self.env.get_observations()
         num_obs = obs.shape[1]
         if "critic" in extras["observations"]:
             num_critic_obs = extras["observations"]["critic"].shape[1]
         else:
             num_critic_obs = num_obs
-        actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic | ActorCriticRecurrent | ActorCriticBeta | ActorCriticSeparate
-        actor_critic: ActorCritic | ActorCriticRecurrent | ActorCriticBeta | ActorCriticSeparate = actor_critic_class(
-            num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
-        ).to(self.device)
-        alg_class = eval(self.alg_cfg.pop("class_name"))  # PPO
-        self.alg: PPO = alg_class(actor_critic, device=self.device, **self.alg_cfg)
+                
+        if "num_logits" in self.policy_cfg["action_distribution"]:
+            num_logits = self.policy_cfg["action_distribution"]["num_logits"]
+        else:
+            num_logits = self.env.num_actions
+        
+        actor_class = eval(self.policy_cfg["actor_architecture"]["class_name"])
+        actor_model = actor_class(num_obs, num_critic_obs, num_logits, empirical_normalization = self.empirical_normalization, **self.policy_cfg["actor_architecture"])
+        critic_class = eval(self.policy_cfg["critic_architecture"]["class_name"])
+        critic_model = critic_class(num_obs, num_critic_obs, 1, empirical_normalization = self.empirical_normalization, **self.policy_cfg["critic_architecture"])
+        action_dist_class = eval(self.policy_cfg["action_distribution"]["model_class"])
+        action_dist = action_dist_class(self.env.num_actions, self.policy_cfg["action_distribution"])
+
+        # Define actor critic model
+        actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCriticSeparate
+        actor_critic = actor_critic_class(actor_model, critic_model, action_dist).to(self.device)
+
+        self.alg_cfg.pop("class_name")
+        self.alg = PPOBeta(actor_critic, device=self.device, **self.alg_cfg)
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
-        self.empirical_normalization = self.cfg["empirical_normalization"]
-        if self.empirical_normalization:
-            self.obs_normalizer = EmpiricalNormalization(shape=[num_obs], until=1.0e8).to(self.device)
-            self.critic_obs_normalizer = EmpiricalNormalization(shape=[num_critic_obs], until=1.0e8).to(self.device)
-        else:
-            self.obs_normalizer = torch.nn.Identity()  # no normalization
-            self.critic_obs_normalizer = torch.nn.Identity()  # no normalization
+
         # init storage and model
         self.alg.init_storage(
             self.env.num_envs,
             self.num_steps_per_env,
-            [num_obs],
-            [num_critic_obs],
+            [actor_model.num_obs],
+            [critic_model.num_obs],
             [self.env.num_actions],
         )
+        self.asymmetric_critic = False
+        self.critic_obs_list = None
+        if actor_model.num_obs != critic_model.num_obs:
+            self.asymmetric_critic = True
+            self.critic_obs_list = critic_model.obs_names
 
         # Log
         self.log_dir = log_dir
@@ -111,11 +128,18 @@ class OnPolicyRunner:
                 for i in range(self.num_steps_per_env):
                     actions = self.alg.act(obs, critic_obs)
                     obs, rewards, dones, infos = self.env.step(actions)
-                    obs = self.obs_normalizer(obs)
-                    if "critic" in infos["observations"]:
-                        critic_obs = self.critic_obs_normalizer(infos["observations"]["critic"])
-                    else:
-                        critic_obs = obs
+                    # obs = self.obs_normalizer(obs)
+                    # if self.asymmetric_critic:
+                    #     # Concatenate obs from critic obs list
+                    #     critic_obs = torch.cat([infos["observations"][self.critic_obs_list]], dim=-1)
+                    # else:
+
+                    critic_obs = obs
+
+                    # if "critic" in infos["observations"]:
+                    #     critic_obs = self.critic_obs_normalizer(infos["observations"]["critic"])
+                    # else:
+
                     obs, critic_obs, rewards, dones = (
                         obs.to(self.device),
                         critic_obs.to(self.device),
@@ -147,19 +171,22 @@ class OnPolicyRunner:
                 start = stop
                 self.alg.compute_returns(critic_obs)
 
-            mean_value_loss, mean_surrogate_loss = self.alg.update()
+            mean_value_loss, mean_surrogate_loss, mean_entropy_bonus = self.alg.update()
+
             stop = time.time()
             learn_time = stop - start
             self.current_learning_iteration = it
             if self.log_dir is not None:
                 self.log(locals())
             if it % self.save_interval == 0:
-                self.save(os.path.join(self.log_dir, f"model_{it}.pt"))
+                self.save(os.path.join(self.log_dir, "model_{}.pt".format(it)))
             ep_infos.clear()
             if it == start_iter:
                 store_code_state(self.log_dir, self.git_status_repos)
 
-        self.save(os.path.join(self.log_dir, f"model_{self.current_learning_iteration}.pt"))
+        self.save(os.path.join(self.log_dir, "model_{}.pt".format(self.current_learning_iteration)))
+        # TODO(areske): return something less noisy, e.g. exponential moving average
+        return statistics.mean(rewbuffer)
 
     def log(self, locs: dict, width: int = 80, pad: int = 35):
         self.tot_timesteps += self.num_steps_per_env * self.env.num_envs
@@ -187,13 +214,15 @@ class OnPolicyRunner:
                 else:
                     self.writer.add_scalar("Episode/" + key, value, locs["it"])
                     ep_string += f"""{f'Mean episode {key}:':>{pad}} {value:.4f}\n"""
-        mean_std = self.alg.actor_critic.std.mean()
+        
+        actor_log_data_dict = self.alg.actor_critic.log_info()
+
         fps = int(self.num_steps_per_env * self.env.num_envs / (locs["collection_time"] + locs["learn_time"]))
 
         self.writer.add_scalar("Loss/value_function", locs["mean_value_loss"], locs["it"])
         self.writer.add_scalar("Loss/surrogate", locs["mean_surrogate_loss"], locs["it"])
+        self.writer.add_scalar("Loss/entropy", locs["mean_entropy_bonus"], locs["it"])
         self.writer.add_scalar("Loss/learning_rate", self.alg.learning_rate, locs["it"])
-        self.writer.add_scalar("Policy/mean_noise_std", mean_std.item(), locs["it"])
         self.writer.add_scalar("Perf/total_fps", fps, locs["it"])
         self.writer.add_scalar("Perf/collection time", locs["collection_time"], locs["it"])
         self.writer.add_scalar("Perf/learning_time", locs["learn_time"], locs["it"])
@@ -216,7 +245,7 @@ class OnPolicyRunner:
                             'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
                 f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
                 f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
-                f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
+                f"""{'Entropy bonus:':>{pad}} {locs['mean_entropy_bonus']:.4f}\n"""
                 f"""{'Mean reward:':>{pad}} {statistics.mean(locs['rewbuffer']):.2f}\n"""
                 f"""{'Mean episode length:':>{pad}} {statistics.mean(locs['lenbuffer']):.2f}\n"""
             )
@@ -230,7 +259,7 @@ class OnPolicyRunner:
                             'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
                 f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
                 f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
-                f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
+                f"""{'Entropy bonus:':>{pad}} {locs['mean_entropy_bonus']:.4f}\n"""
             )
             #   f"""{'Mean reward/step:':>{pad}} {locs['mean_reward']:.2f}\n"""
             #   f"""{'Mean episode length/episode:':>{pad}} {locs['mean_trajectory_length']:.2f}\n""")
@@ -253,9 +282,6 @@ class OnPolicyRunner:
             "iter": self.current_learning_iteration,
             "infos": infos,
         }
-        if self.empirical_normalization:
-            saved_dict["obs_norm_state_dict"] = self.obs_normalizer.state_dict()
-            saved_dict["critic_obs_norm_state_dict"] = self.critic_obs_normalizer.state_dict()
         torch.save(saved_dict, path)
 
         # Upload model to external logging service
@@ -265,9 +291,7 @@ class OnPolicyRunner:
     def load(self, path, load_optimizer=True):
         loaded_dict = torch.load(path)
         self.alg.actor_critic.load_state_dict(loaded_dict["model_state_dict"])
-        if self.empirical_normalization:
-            self.obs_normalizer.load_state_dict(loaded_dict["obs_norm_state_dict"])
-            self.critic_obs_normalizer.load_state_dict(loaded_dict["critic_obs_norm_state_dict"])
+
         if load_optimizer:
             self.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
         self.current_learning_iteration = loaded_dict["iter"]
@@ -278,23 +302,13 @@ class OnPolicyRunner:
         if device is not None:
             self.alg.actor_critic.to(device)
         policy = self.alg.actor_critic.act_inference
-        if self.cfg["empirical_normalization"]:
-            if device is not None:
-                self.obs_normalizer.to(device)
-            policy = lambda x: self.alg.actor_critic.act_inference(self.obs_normalizer(x))  # noqa: E731
         return policy
 
     def train_mode(self):
         self.alg.actor_critic.train()
-        if self.empirical_normalization:
-            self.obs_normalizer.train()
-            self.critic_obs_normalizer.train()
 
     def eval_mode(self):
         self.alg.actor_critic.eval()
-        if self.empirical_normalization:
-            self.obs_normalizer.eval()
-            self.critic_obs_normalizer.eval()
 
     def add_git_repo_to_log(self, repo_file_path):
         self.git_status_repos.append(repo_file_path)
