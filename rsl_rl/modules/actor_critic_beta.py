@@ -115,7 +115,7 @@ class ActorCriticBeta(nn.Module):
 
         # Nummerical stability
         alpha += 1e-6
-        beta += 1e-6
+        beta +=  1e-4
         return alpha, beta
 
     def update_distribution(self, observations):
@@ -124,7 +124,7 @@ class ActorCriticBeta(nn.Module):
         alpha, beta = self.get_beta_parameters(logits)
 
         # Update distribution
-        self.distribution = Beta(alpha, beta)
+        self.distribution = Beta(alpha, beta, validate_args=False)
 
 
     def act(self, observations, **kwargs):
