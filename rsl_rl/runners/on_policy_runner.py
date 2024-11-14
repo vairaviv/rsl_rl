@@ -13,7 +13,20 @@ from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 import rsl_rl
 from rsl_rl.algorithms import PPO
 from rsl_rl.env import VecEnv
-from rsl_rl.modules import ActorCritic, ActorCriticRecurrent, ActorCriticBeta, EmpiricalNormalization, ActorCriticSeparate, SimpleNavPolicy
+from rsl_rl.modules import (
+    ActorCritic, 
+    ActorCriticRecurrent, 
+    ActorCriticBeta, 
+    EmpiricalNormalization, 
+    ActorCriticSeparate, 
+    SimpleNavPolicy, 
+    ActorCriticBetaCompress,
+    ActorCriticBetaCompressTemporal,
+    ActorCriticBetaLidarTemporal,
+    ActorCriticBetaRecurrentLidar,
+    ActorCriticBetaRecurrentLidarCnn,
+    ActorCriticBetaRecurrentLidarHeightCnn
+)
 from rsl_rl.utils import store_code_state
 from rsl_rl.distribution.beta_distribution import BetaDistribution
 
@@ -34,7 +47,7 @@ class OnPolicyRunner:
         else:
             num_critic_obs = num_obs
         actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic | ActorCriticRecurrent | ActorCriticBeta | ActorCriticSeparate
-        actor_critic: ActorCritic | ActorCriticRecurrent | ActorCriticBeta | ActorCriticSeparate = actor_critic_class(
+        actor_critic: ActorCritic | ActorCriticRecurrent | ActorCriticBeta | ActorCriticSeparate | ActorCriticBetaRecurrentLidarCnn = actor_critic_class(
             num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
         ).to(self.device)
         alg_class = eval(self.alg_cfg.pop("class_name"))  # PPO
@@ -156,8 +169,8 @@ class OnPolicyRunner:
             if it % self.save_interval == 0:
                 self.save(os.path.join(self.log_dir, f"model_{it}.pt"))
             ep_infos.clear()
-            if it == start_iter:
-                store_code_state(self.log_dir, self.git_status_repos)
+            # if it == start_iter:
+            #     store_code_state(self.log_dir, self.git_status_repos)
 
         self.save(os.path.join(self.log_dir, f"model_{self.current_learning_iteration}.pt"))
 
