@@ -25,10 +25,16 @@ from rsl_rl.modules import (
     ActorCriticBetaLidarTemporal,
     ActorCriticBetaRecurrentLidar,
     ActorCriticBetaRecurrentLidarCnn,
-    ActorCriticBetaRecurrentLidarHeightCnn
+    ActorCriticBetaRecurrentLidarHeightCnn,
+    ActorCriticBetaLidarCNN,
 )
 from rsl_rl.utils import store_code_state
 from rsl_rl.distribution.beta_distribution import BetaDistribution
+
+# imports to check which steps takes the longest while running
+import cProfile 
+import io
+import pstats
 
 
 class OnPolicyRunner:
@@ -47,7 +53,7 @@ class OnPolicyRunner:
         else:
             num_critic_obs = num_obs
         actor_critic_class = eval(self.policy_cfg.pop("class_name"))  # ActorCritic | ActorCriticRecurrent | ActorCriticBeta | ActorCriticSeparate
-        actor_critic: ActorCritic | ActorCriticRecurrent | ActorCriticBeta | ActorCriticSeparate | ActorCriticBetaRecurrentLidarCnn = actor_critic_class(
+        actor_critic: ActorCritic | ActorCriticBeta | ActorCriticBetaRecurrentLidarCnn |ActorCriticBetaLidarCNN = actor_critic_class(
             num_obs, num_critic_obs, self.env.num_actions, **self.policy_cfg
         ).to(self.device)
         alg_class = eval(self.alg_cfg.pop("class_name"))  # PPO
@@ -161,6 +167,21 @@ class OnPolicyRunner:
                 self.alg.compute_returns(critic_obs)
 
             mean_value_loss, mean_surrogate_loss = self.alg.update()
+
+            # # TODO: added to check why it takes so long, remove after 
+            # pr = cProfile.Profile()
+            # pr.enable()
+            # mean_value_loss, mean_surrogate_loss = self.alg.update()
+            # pr.disable()
+            # s = io.StringIO()
+            # sortby = 'cumulative'
+            # ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
+            # test = "512envs_Conv_NoGru_update_function"
+            # output_dir = f"outputs/{test}"
+            # os.makedirs(output_dir, exist_ok=True)
+            # ps.dump_stats(f"{output_dir}/profile_output_{it}_{i}.prof")
+            # print(s.getvalue())    
+
             stop = time.time()
             learn_time = stop - start
             self.current_learning_iteration = it

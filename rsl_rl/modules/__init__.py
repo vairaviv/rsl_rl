@@ -14,6 +14,7 @@ from .ac_beta_compress import ActorCriticBetaCompress, ActorCriticBetaCompressTe
 from .ac_lidar import ActorCriticBetaRecurrentLidar
 from .ac_lidar_extra import ActorCriticBetaRecurrentLidarCnn
 from .ac_lidar_height import ActorCriticBetaRecurrentLidarHeightCnn
+from .ac_lidar_cnn import ActorCriticBetaLidarCNN
 
 __all__ = [
     "ActorCritic",
@@ -28,4 +29,20 @@ __all__ = [
     "ActorCriticBetaRecurrentLidar",
     "ActorCriticBetaRecurrentLidarCnn",
     "ActorCriticBetaRecurrentLidarHeightCnn",
+    "ActorCriticBetaLidarCNN"
 ]
+
+    # Network structure Actor Critic Lidar CNN with feature alignment for target pos + proprioception:
+    #                             _________                               _________
+    #           Input:           |         |            Input:           |         |
+    #           pos_history      |  MLP2   |            target_pos       |  MLP4   |
+    #                            |_________|            proprioception   |_________|
+    #                                 |                                       |
+    #                                 |                                       |
+    #                                 --------------------                    |
+    #                                                     |                   |
+    #                                                     v                   v                                     
+    #                  _________             _________         _________          _________
+    # Input           |         |           |         |        |         |        |         |
+    # lidar_dim x     |  CNN    | --------> |  MLP1   |------> |  MLP3   |------> |  MLP5   | -----> Output
+    # history dim     |_________|           |_________|        |_________|        |_________|
