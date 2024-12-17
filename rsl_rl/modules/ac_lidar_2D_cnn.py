@@ -25,11 +25,11 @@ def create_mlp(input_dim: int, layer_dims: list[int], activation: nn.Module, rem
     # Construct the sequential model
     return nn.Sequential(*layers)
 
-class FlexibleBatchCircularlPadConv1d(nn.Module):
+class FlexibleBatchCircularlPadConv2d(nn.Module):
     def __init__(self, input_channels, output_channels, kernel_size, stride):
         super().__init__()
         self.padding_size = kernel_size // 2
-        self.conv = nn.Conv1d(input_channels, output_channels, kernel_size, stride)
+        self.conv = nn.Conv2d(input_channels, output_channels, kernel_size, stride=(1, stride))
 
     def circular_pad_1d(self, x, pad):
         """Apply circular padding to the last dimension of a tensor.
@@ -39,22 +39,42 @@ class FlexibleBatchCircularlPadConv1d(nn.Module):
         if pad == 0:
             return x
         return torch.cat([x[..., -pad:], x, x[..., :pad]], dim=-1)
+    
+    def temporal_pad_1d(self, x, pad):
+        "Apply padding to the temporal data in order to keep the dimensions."
+
+        if pad == 0:
+            return x
+        else:
+            padded_x = torch.cat(
+                [
+                    # Repeat the first slice `pad` times
+                    x[..., :1, :].repeat(1, 1, pad, 1),
+                    x,  # The original tensor
+                    # Repeat the last slice `pad` times
+                    x[..., -1:, :].repeat(1, 1, pad, 1)
+                ],
+                dim=-2  # Concatenate along the history dimension
+            )
+        return padded_x
 
     def forward(self, x):
         original_shape = x.shape
-        # Flatten all but the last two dimensions into one dimension for batch handling
-        x = x.reshape(-1, *original_shape[-2:])
-        # Apply circular padding
+        # # Flatten all but the last two dimensions into one dimension for batch handling
+        # x = x.reshape(-1, *original_shape[-2:])
+        # Apply circular padding for lidar distances
         x = self.circular_pad_1d(x, self.padding_size)
+        # Apply constant padding for temporal data
+        x = self.temporal_pad_1d(x, self.padding_size)
         # Apply convolution
         x = self.conv(x)
         # Reshape to the original batch structure with new channel dimension
-        new_shape = original_shape[:-2] + (x.shape[-2], x.shape[-1])
+        new_shape = original_shape[:-3] + (x.shape[-3], x.shape[-2], x.shape[-1]) # num_envs, channels, history_dim, lidar_dim
         x = x.reshape(new_shape)
         return x
 
 
-def create_cnn(
+def create_2D_cnn(
     input_channels: int,
     layer_channels: list[int],
     kernel_sizes: list[int],
@@ -68,7 +88,7 @@ def create_cnn(
 
     # Create custom Conv1d with circular padding and activation layers for each pair
     for input_channels, output_channels, kernel_size, stride in input_output_pairs:
-        layers.append(FlexibleBatchCircularlPadConv1d(input_channels, output_channels, kernel_size, stride))
+        layers.append(FlexibleBatchCircularlPadConv2d(input_channels, output_channels, kernel_size, stride))
         layers.append(activation)
 
     # Construct the sequential model
@@ -82,7 +102,7 @@ def calculate_cnn_output_size(
     strides: list[int],
 ):
     """
-    Calculate the output size of a CNN created with FlexibleBatchCircularlPadConv1d layers.
+    Calculate the output size of a CNN created with FlexibleBatchCircularlPadConv2d layers.
 
     Args:
         input_dim (int): Length of the input sequence.
@@ -105,7 +125,7 @@ def calculate_cnn_output_size(
     return current_length
 
 
-class ActorCriticBetaLidarCNN(nn.Module):
+class ActorCriticBetaLidar2DCNN(nn.Module):
     """A Network structure for training a navigation policy.
     
     possible input dimensions are:
@@ -127,8 +147,8 @@ class ActorCriticBetaLidarCNN(nn.Module):
     #                                                     v                   v                                     
     #                  _________             _________          _________          _________                 params Beta:
     # Input           |         |           |         |        |         |        |         |                alpha_vx,
-    # history dim x   |  CNN    | --------> |  MLP1   |------> |  MLP3   |------> |  MLP5   | -----> Output: beta_vx, 
-    # lidar_dim       |_________|           |_________|        |_________|        |_________|                alpha_vy, 
+    # lidar_dim x     |  CNN    | --------> |  MLP1   |------> |  MLP3   |------> |  MLP5   | -----> Output: beta_vx, 
+    # history dim     |_________|           |_________|        |_________|        |_________|                alpha_vy, 
     #                                                                                                        beta_vy
     #                                                                                                        alpha_theta,
     #                                                                                                        beta_theta
@@ -158,7 +178,7 @@ class ActorCriticBetaLidarCNN(nn.Module):
             lidar_extra_dim: int,
             lidar_history_dim: int,
             target_cpg_layer_dim: list[int],
-            lidar_cnn_layer_dim: list[int],
+            lidar_cnn_channel_dim: list[int],
             lidar_cnn_kernel_sizes: list[int],
             lidar_cnn_strides: list[int],
             lidar_cnn_to_mlp_layer_dim: list[int],
@@ -207,35 +227,35 @@ class ActorCriticBetaLidarCNN(nn.Module):
         ##
 
         # CNN for lidar embedding
-        self.actor_lidar_embedding_cnn = create_cnn(
-            lidar_history_dim,
-            lidar_cnn_layer_dim,
+        self.actor_lidar_embedding_cnn = create_2D_cnn(
+            1,
+            lidar_cnn_channel_dim,
             lidar_cnn_kernel_sizes,
             lidar_cnn_strides,
             activation_module,
         )
 
-        self.critic_lidar_embedding_cnn = create_cnn(
-            lidar_history_dim,
-            lidar_cnn_layer_dim,
+        self.critic_lidar_embedding_cnn = create_2D_cnn(
+            1,
+            lidar_cnn_channel_dim,
             lidar_cnn_kernel_sizes,
             lidar_cnn_strides,
             activation_module,
         )
 
         # calculate CNN output size, 
-        # TODO: should be the same as what? last lidar_cnn_layer_dim * (the lidar_cnn_layer_dim / lidar_cnn_strides)
+        # TODO: should be the same as what? last lidar_cnn_channel_dim * (the lidar_cnn_channel_dim / lidar_cnn_strides)
         calculated_out_size = calculate_cnn_output_size(
-            lidar_history_dim, 
-            lidar_cnn_layer_dim, 
+            1, 
+            lidar_cnn_channel_dim, 
             lidar_cnn_kernel_sizes, 
             lidar_cnn_strides
         )
-        calculated_flattened_out_dim = calculated_out_size * lidar_cnn_layer_dim[-1]
+        calculated_flattened_out_dim = calculated_out_size * lidar_cnn_channel_dim[-1]
 
-        dummy_input = torch.zeros(1, lidar_history_dim, lidar_dim)
+        dummy_input = torch.zeros(1,1, lidar_history_dim, lidar_dim)
         dummy_out = self.actor_lidar_embedding_cnn(dummy_input)
-        flattened_out_dim = dummy_out.shape[1] * dummy_out.shape[2]
+        flattened_out_dim = dummy_out.shape[1] * dummy_out.shape[2] * dummy_out.shape[3] 
 
         if calculated_flattened_out_dim != flattened_out_dim:
             # raise ValueError(
@@ -338,6 +358,7 @@ class ActorCriticBetaLidarCNN(nn.Module):
     def actor_forward(self, x, masks=None, hidden_states=None):
         target_cpg_obs = x[..., : self.target_cpg_obs_dim]
         lidar_obs = x[..., self.target_cpg_obs_dim : self.target_cpg_obs_dim + self.lidar_dim * self.lidar_history_dim]
+        lidar_obs = lidar_obs.unsqueeze(1) # channel 1 for the 2D CNN
         if self.lidar_extra_dim > 0:
             # TODO: @vairaviv this assumes the observation vector only contains target, cpg, lidar+history 
             # and pose history information in this order and is concatenated accordingly
@@ -356,7 +377,7 @@ class ActorCriticBetaLidarCNN(nn.Module):
         if self.lidar_extra_dim > 0:
             lidar_extra_embedded = self.actor_lidar_extra_mlp(lidar_extra_obs)
             # merge the lidar and lidar extra embeddings
-            lidar_embedded_mlp = torch.cat((lidar_embedded_mlp, lidar_extra_embedded), dim=-1)
+            lidar_embedded_mlp = torch.cat((lidar_embedded_mlp.squeeze(1), lidar_extra_embedded), dim=-1)
 
         lidar_merged_embedded = self.actor_lidar_merged_mlp(lidar_embedded_mlp)
 
@@ -372,6 +393,7 @@ class ActorCriticBetaLidarCNN(nn.Module):
     def critic_forward(self, x, masks=None, hidden_states=None):
         target_cpg_obs = x[..., : self.target_cpg_obs_dim]
         lidar_obs = x[..., self.target_cpg_obs_dim : self.target_cpg_obs_dim + self.lidar_dim * self.lidar_history_dim]
+        lidar_obs = lidar_obs.unsqueeze(1) # channel 1 for the 2D CNN
         if self.lidar_extra_dim > 0:
             # TODO: @vairaviv this assumes the observation vector only contains target, cpg, lidar+history 
             # and pose history information in this order and is concatenated accordingly
@@ -390,7 +412,7 @@ class ActorCriticBetaLidarCNN(nn.Module):
         if self.lidar_extra_dim > 0:
             lidar_extra_embedded = self.critic_lidar_extra_mlp(lidar_extra_obs)
             # merge the lidar and lidar extra embeddings
-            lidar_embedded_mlp = torch.cat((lidar_embedded_mlp, lidar_extra_embedded), dim=-1)
+            lidar_embedded_mlp = torch.cat((lidar_embedded_mlp.squeeze(1), lidar_extra_embedded), dim=-1)
 
         lidar_merged_embedded = self.critic_lidar_merged_mlp(lidar_embedded_mlp)
 
