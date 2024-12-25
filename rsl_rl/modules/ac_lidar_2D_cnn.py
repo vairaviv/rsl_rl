@@ -25,7 +25,7 @@ def create_mlp(input_dim: int, layer_dims: list[int], activation: nn.Module, rem
     # Construct the sequential model
     return nn.Sequential(*layers)
 
-class FlexibleBatchCircularlPadConv2d(nn.Module):
+class CircularPadConv2d(nn.Module):
     def __init__(self, input_channels, output_channels, kernel_size, stride):
         super().__init__()
         self.padding_size = kernel_size // 2
@@ -88,7 +88,7 @@ def create_2D_cnn(
 
     # Create custom Conv1d with circular padding and activation layers for each pair
     for input_channels, output_channels, kernel_size, stride in input_output_pairs:
-        layers.append(FlexibleBatchCircularlPadConv2d(input_channels, output_channels, kernel_size, stride))
+        layers.append(CircularPadConv2d(input_channels, output_channels, kernel_size, stride))
         layers.append(activation)
 
     # Construct the sequential model

@@ -25,7 +25,7 @@ def create_mlp(input_dim: int, layer_dims: list[int], activation: nn.Module, rem
     # Construct the sequential model
     return nn.Sequential(*layers)
 
-class FlexibleBatchCircularlPadConv1d(nn.Module):
+class CircularPadConv1d(nn.Module):
     def __init__(self, input_channels, output_channels, kernel_size, stride):
         super().__init__()
         self.padding_size = kernel_size // 2
@@ -68,7 +68,7 @@ def create_cnn(
 
     # Create custom Conv1d with circular padding and activation layers for each pair
     for input_channels, output_channels, kernel_size, stride in input_output_pairs:
-        layers.append(FlexibleBatchCircularlPadConv1d(input_channels, output_channels, kernel_size, stride))
+        layers.append(CircularPadConv1d(input_channels, output_channels, kernel_size, stride))
         layers.append(activation)
 
     # Construct the sequential model
@@ -127,8 +127,8 @@ class ActorCriticBetaLidarCNN(nn.Module):
     #                                                     v                   v                                     
     #                  _________             _________          _________          _________                 params Beta:
     # Input           |         |           |         |        |         |        |         |                alpha_vx,
-    # history dim x   |  CNN    | --------> |  MLP1   |------> |  MLP3   |------> |  MLP5   | -----> Output: beta_vx, 
-    # lidar_dim       |_________|           |_________|        |_________|        |_________|                alpha_vy, 
+    # lidar_dim x     |  CNN    | --------> |  MLP1   |------> |  MLP3   |------> |  MLP5   | -----> Output: beta_vx, 
+    # history dim     |_________|           |_________|        |_________|        |_________|                alpha_vy, 
     #                                                                                                        beta_vy
     #                                                                                                        alpha_theta,
     #                                                                                                        beta_theta
@@ -165,6 +165,7 @@ class ActorCriticBetaLidarCNN(nn.Module):
             lidar_extra_mlp_layer_dim: list[int],
             lidar_merge_mlp_layer_dim: list[int],
             out_layer_dim: list[int],
+            permute_obs: bool = True,
             activation: str = "elu",
             beta_initial_logit: float = 0.5,  # centered mean initially
             beta_initial_scale: float = 5.0,  # sharper distribution initially
@@ -182,7 +183,7 @@ class ActorCriticBetaLidarCNN(nn.Module):
         # TODO @vairaviv assumption made that the NN is symmetric and num_actor_obs == num_critic_obs,
         # if changed this needs to be adapted
         if (
-            num_actor_obs != target_dim + cpg_dim + (lidar_dim) * lidar_history_dim + lidar_extra_dim 
+            num_actor_obs != target_dim + cpg_dim + (lidar_dim ) * lidar_history_dim + lidar_extra_dim 
             or num_actor_obs != num_critic_obs
         ):
             raise ValueError(
@@ -201,6 +202,12 @@ class ActorCriticBetaLidarCNN(nn.Module):
         self.lidar_dim = lidar_dim
         self.lidar_history_dim = lidar_history_dim
         self.lidar_extra_dim = lidar_extra_dim
+
+        self.permute_obs = permute_obs
+
+        if self.permute_obs:
+            self.lidar_history_dim = lidar_dim
+            self.lidar_dim = lidar_history_dim
         
         ##
         # define networks
@@ -208,7 +215,7 @@ class ActorCriticBetaLidarCNN(nn.Module):
 
         # CNN for lidar embedding
         self.actor_lidar_embedding_cnn = create_cnn(
-            lidar_history_dim,
+            self.lidar_history_dim,
             lidar_cnn_layer_dim,
             lidar_cnn_kernel_sizes,
             lidar_cnn_strides,
@@ -216,7 +223,7 @@ class ActorCriticBetaLidarCNN(nn.Module):
         )
 
         self.critic_lidar_embedding_cnn = create_cnn(
-            lidar_history_dim,
+            self.lidar_history_dim,
             lidar_cnn_layer_dim,
             lidar_cnn_kernel_sizes,
             lidar_cnn_strides,
@@ -226,14 +233,14 @@ class ActorCriticBetaLidarCNN(nn.Module):
         # calculate CNN output size, 
         # TODO: should be the same as what? last lidar_cnn_layer_dim * (the lidar_cnn_layer_dim / lidar_cnn_strides)
         calculated_out_size = calculate_cnn_output_size(
-            lidar_history_dim, 
+            self.lidar_history_dim, 
             lidar_cnn_layer_dim, 
             lidar_cnn_kernel_sizes, 
             lidar_cnn_strides
         )
         calculated_flattened_out_dim = calculated_out_size * lidar_cnn_layer_dim[-1]
 
-        dummy_input = torch.zeros(1, lidar_history_dim, lidar_dim)
+        dummy_input = torch.zeros(1, self.lidar_history_dim, self.lidar_dim)
         dummy_out = self.actor_lidar_embedding_cnn(dummy_input)
         flattened_out_dim = dummy_out.shape[1] * dummy_out.shape[2]
 
@@ -345,9 +352,16 @@ class ActorCriticBetaLidarCNN(nn.Module):
 
         # reshape the observation and embed the lidar data in CNN
         batch_shape = lidar_obs.shape[:-1]
-        lidar_obs_reshaped = lidar_obs.reshape(*batch_shape, self.lidar_history_dim, self.lidar_dim)
-        lidar_embedded_cnn = self.actor_lidar_embedding_cnn(lidar_obs_reshaped)
         
+        if self.permute_obs:
+            lidar_obs_reshaped = lidar_obs.reshape(*batch_shape, self.lidar_dim, self.lidar_history_dim)
+            lidar_obs_permuted = lidar_obs_reshaped.permute(0, 2, 1)
+            lidar_embedded_cnn = self.actor_lidar_embedding_cnn(lidar_obs_permuted)
+        else:
+            lidar_obs_reshaped = lidar_obs.reshape(*batch_shape, self.lidar_history_dim, self.lidar_dim)
+            lidar_embedded_cnn = self.actor_lidar_embedding_cnn(lidar_obs_reshaped)
+        
+
         # reshape the tensor from CNN to input to MLP 
         lidar_embedded_cnn = lidar_embedded_cnn.view(*batch_shape, -1)
         lidar_embedded_mlp = self.actor_lidar_embedding_to_mlp(lidar_embedded_cnn)
@@ -379,8 +393,14 @@ class ActorCriticBetaLidarCNN(nn.Module):
 
         # reshape the observation and embed the lidar data in CNN
         batch_shape = lidar_obs.shape[:-1]
-        lidar_obs_reshaped = lidar_obs.reshape(*batch_shape, self.lidar_history_dim, self.lidar_dim)
-        lidar_embedded_cnn = self.critic_lidar_embedding_cnn(lidar_obs_reshaped)
+        
+        if self.permute_obs:
+            lidar_obs_reshaped = lidar_obs.reshape(*batch_shape, self.lidar_dim, self.lidar_history_dim)
+            lidar_obs_permuted = lidar_obs_reshaped.permute(0, 2, 1)
+            lidar_embedded_cnn = self.actor_lidar_embedding_cnn(lidar_obs_permuted)
+        else:
+            lidar_obs_reshaped = lidar_obs.reshape(*batch_shape, self.lidar_history_dim, self.lidar_dim)
+            lidar_embedded_cnn = self.actor_lidar_embedding_cnn(lidar_obs_reshaped)
         
         # reshape the tensor from CNN to input to MLP 
         lidar_embedded_cnn = lidar_embedded_cnn.view(*batch_shape, -1)
