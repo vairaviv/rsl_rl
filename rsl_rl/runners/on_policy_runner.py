@@ -28,6 +28,7 @@ from rsl_rl.modules import (
     ActorCriticBetaRecurrentLidarHeightCnn,
     ActorCriticBetaLidarCNN,
     ActorCriticBetaLidar2DCNN,
+    ActorCriticBeta2DCNN,
 )
 from rsl_rl.utils import store_code_state
 from rsl_rl.distribution.beta_distribution import BetaDistribution
@@ -48,7 +49,14 @@ class OnPolicyRunner:
         self.device = device
         self.env = env
         obs, extras = self.env.get_observations()
-        num_obs = obs.shape[1]
+
+        # TODO: @vairaviv adjusted to non flattened observations 
+        if isinstance(obs, dict):
+            # num_obs = [obs[keys].shape for keys in obs.keys()]
+            num_obs = obs
+        else:
+            num_obs = obs.shape[1]
+
         if "critic" in extras["observations"]:
             num_critic_obs = extras["observations"]["critic"].shape[1]
         else:
@@ -69,6 +77,17 @@ class OnPolicyRunner:
             self.obs_normalizer = torch.nn.Identity()  # no normalization
             self.critic_obs_normalizer = torch.nn.Identity()  # no normalization
         # init storage and model
+        if isinstance(obs, dict):
+            num_obs = [size for keys in obs.keys() for size in obs[keys].shape[1:]]
+            # num_obs = obs
+
+        # self.alg.init_storage(
+        #     self.env.num_envs,
+        #     self.num_steps_per_env,
+        #     [*num_obs],
+        #     [num_critic_obs],
+        #     [self.env.num_actions],
+        # )
         self.alg.init_storage(
             self.env.num_envs,
             self.num_steps_per_env,
