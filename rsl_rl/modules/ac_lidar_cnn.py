@@ -148,28 +148,28 @@ class ActorCriticBetaLidarCNN(nn.Module):
     is_recurrent = False
 
     def __init__(
-            self,
-            num_actor_obs: int,
-            num_critic_obs: int,
-            num_actions: int,
-            target_dim: int,
-            cpg_dim: int,
-            lidar_dim: int,
-            lidar_extra_dim: int,
-            lidar_history_dim: int,
-            target_cpg_layer_dim: list[int],
-            lidar_cnn_layer_dim: list[int],
-            lidar_cnn_kernel_sizes: list[int],
-            lidar_cnn_strides: list[int],
-            lidar_cnn_to_mlp_layer_dim: list[int],
-            lidar_extra_mlp_layer_dim: list[int],
-            lidar_merge_mlp_layer_dim: list[int],
-            out_layer_dim: list[int],
-            permute_obs: bool = True,
-            activation: str = "elu",
-            beta_initial_logit: float = 0.5,  # centered mean initially
-            beta_initial_scale: float = 5.0,  # sharper distribution initially
-            **kwargs,
+        self,
+        num_actor_obs: int,
+        num_critic_obs: int,
+        num_actions: int,
+        target_dim: int,
+        cpg_dim: int,
+        lidar_dim: int,
+        lidar_extra_dim: int,
+        lidar_history_dim: int,
+        target_cpg_layer_dim: list[int],
+        lidar_cnn_layer_dim: list[int],
+        lidar_cnn_kernel_sizes: list[int],
+        lidar_cnn_strides: list[int],
+        lidar_cnn_to_mlp_layer_dim: list[int],
+        lidar_extra_mlp_layer_dim: list[int],
+        lidar_merge_mlp_layer_dim: list[int],
+        out_layer_dim: list[int],
+        permute_obs: bool = True,
+        activation: str = "elu",
+        beta_initial_logit: float = 0.5,  # centered mean initially
+        beta_initial_scale: float = 5.0,  # sharper distribution initially
+        **kwargs,
     ):
         
         # check if any additional arguments were given to the module
@@ -283,8 +283,8 @@ class ActorCriticBetaLidarCNN(nn.Module):
         self.critic_target_cpg_mlp = create_mlp(self.target_cpg_obs_dim, target_cpg_layer_dim, activation_module)
 
         # MLP for Navigation, with output defined for actor and critic separate
-        actor_out_layers = out_layer_dim + [num_actions * 2] # for the distribution needed (alpha and beta for each action)
-        critic_out_layers = out_layer_dim + [1] # this is just for the value function, just one value should be outputed
+        actor_out_layers = out_layer_dim + [num_actions * 2]  # for the distribution needed (alpha and beta for each action)
+        critic_out_layers = out_layer_dim + [1]  # this is just for the value function, just one value should be outputed
         self.actor_out_mlp = create_mlp(
             lidar_merge_mlp_layer_dim[-1] + target_cpg_layer_dim[-1], actor_out_layers, activation_module
         )
