@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.jit
 
 from rsl_rl.modules.actor_critic import ActorCritic, get_activation
 from rsl_rl.utils import unpad_trajectories
@@ -154,20 +155,16 @@ class ActorCriticBeta2DCNN(nn.Module):
             num_actions: int,
             proprio_dim: int,
             semantic_map_dim: list[int],
-            # target_dim: int,
-            # cpg_dim: int,
-            # lidar_dim: int,
-            # lidar_extra_dim: int,
-            # lidar_history_dim: int,
             proprio_layer_dim: list[int],
             semantic_cnn_channel_dim: list[int],
             semantic_cnn_kernel_sizes: list[int],
             semantic_cnn_strides: list[int],
             semantic_cnn_to_mlp_layer_dim: list[int],
-            # semantic_extra_mlp_layer_dim: list[int],
-            # semantic_merge_mlp_layer_dim: list[int],
             nav_layer_dim: list[int],
+            parallel_to_mlp_layer_dim: list[int] = [512],
             activation: str = "elu",
+            num_history_time_steps: int = 1,
+            parallel_CNN_process: bool = False,
             beta_initial_logit: float = 0.5,  # centered mean initially
             beta_initial_scale: float = 5.0,  # sharper distribution initially
             **kwargs,
@@ -181,67 +178,105 @@ class ActorCriticBeta2DCNN(nn.Module):
             )
         super().__init__()
 
-        # proprio_dim = 0
-        # for key in num_actor_obs:
-        #     if len(num_actor_obs["target_position"].shape) == 2:
-        #         proprio_dim += num_actor_obs[key].shape[1]
-        #     else:
-        #         pass
-
-        # self.proprio_dim = sum(
-        #     num_actor_obs[key].shape[1] if len(num_actor_obs[key].shape) == 2 else 0 
-        #     for key in num_actor_obs
-        # )
-
-        # self.map_dim = [num_actor_obs["semantic_map"].shape[1], num_actor_obs["semantic_map"].shape[2]]
-        # self.sem_channel = num_actor_obs["semantic_map"].shape[3]
-
-        # self.cnn_input_shape = num_actor_obs["semantic_map"].permute(0, 3, 2, 1).shape
-
         self.proprio_dim = proprio_dim
         self.cnn_input_shape = semantic_map_dim
 
         activation_module = get_activation(activation)
 
-
         # TODO @vairaviv assumption made that the NN is symmetric and num_actor_obs == num_critic_obs,
         # if changed this needs to be adapted
-
-        
-        # if (
-        #     num_actor_obs != target_dim + cpg_dim + (lidar_dim) * lidar_history_dim + lidar_extra_dim 
-        #     or num_actor_obs != num_critic_obs
-        # ):
-        #     raise ValueError(
-        #         f"""num_actor_obs must be equal to target_dim + cpg_dim + (lidar_dim + lidar_extra_dim) * lidar_history_dim .
-        #         num_actor_obs: {num_actor_obs},
-        #         target_dim: {target_dim},
-        #         cpg_dim: {cpg_dim},
-        #         lidar_dim * lidar_history_dim : {(lidar_dim) * lidar_history_dim },
-        #         lidar_extra_dim: {lidar_extra_dim}"""
-        #     )
 
         ##
         # define networks
         ##
-        
-        # CNN for semantic map embedding
-        self.actor_semantic_embedding_cnn = CNN2D(
-            input_shape=self.cnn_input_shape,
-            channels=semantic_cnn_channel_dim,
-            kernels=semantic_cnn_kernel_sizes,
-            strides=semantic_cnn_strides,
-            activation_fn=activation_module,
-            mlp_layers=semantic_cnn_to_mlp_layer_dim
-        )
-        self.critic_semantic_embedding_cnn = CNN2D(
-            input_shape=self.cnn_input_shape,
-            channels=semantic_cnn_channel_dim,
-            kernels=semantic_cnn_kernel_sizes,
-            strides=semantic_cnn_strides,
-            activation_fn=activation_module,
-            mlp_layers=semantic_cnn_to_mlp_layer_dim
-        )
+        if parallel_CNN_process:
+            self.parallel_CNN_process = parallel_CNN_process
+            self.num_history_time_steps = num_history_time_steps
+            self.actor_semantic_embedding_cnn = []
+            self.critic_semantic_embedding_cnn = []
+            for i in range(num_history_time_steps):
+                self.actor_semantic_embedding_cnn.append(
+                    CNN2D(
+                        input_shape=self.cnn_input_shape,
+                        channels=semantic_cnn_channel_dim,
+                        kernels=semantic_cnn_kernel_sizes,
+                        strides=semantic_cnn_strides,
+                        activation_fn=activation_module,
+                        mlp_layers=semantic_cnn_to_mlp_layer_dim
+                    )
+                )
+                self.critic_semantic_embedding_cnn.append(
+                    CNN2D(
+                        input_shape=self.cnn_input_shape,
+                        channels=semantic_cnn_channel_dim,
+                        kernels=semantic_cnn_kernel_sizes,
+                        strides=semantic_cnn_strides,
+                        activation_fn=activation_module,
+                        mlp_layers=semantic_cnn_to_mlp_layer_dim
+                    )
+                )
+                # setattr(
+                #     self, 
+                #     f"actor_semantic_embedding_cnn_{i}", 
+                #     CNN2D(
+                #         input_shape=self.cnn_input_shape,
+                #         channels=semantic_cnn_channel_dim,
+                #         kernels=semantic_cnn_kernel_sizes,
+                #         strides=semantic_cnn_strides,
+                #         activation_fn=activation_module,
+                #         mlp_layers=semantic_cnn_to_mlp_layer_dim
+                #     )
+                # )
+                # setattr(
+                #     self, 
+                #     f"critic_semantic_embedding_cnn_{i}", 
+                #     CNN2D(
+                #         input_shape=self.cnn_input_shape,
+                #         channels=semantic_cnn_channel_dim,
+                #         kernels=semantic_cnn_kernel_sizes,
+                #         strides=semantic_cnn_strides,
+                #         activation_fn=activation_module,
+                #         mlp_layers=semantic_cnn_to_mlp_layer_dim
+                #     )
+                # )
+            setattr(
+                self,
+                "parallel_cnn_to_mlp",
+                MLP(
+                    input_size=num_history_time_steps * semantic_cnn_to_mlp_layer_dim[-1],
+                    shape=[parallel_to_mlp_layer_dim],
+                    actionvation_fn=activation_module,
+                    init_scale=1.0 / float(math.sqrt(2))
+                )
+            )
+            last_semantic_mlp_dim = parallel_to_mlp_layer_dim[-1]
+                
+        else:
+            self.num_history_time_steps = num_history_time_steps
+            if num_history_time_steps > 1:
+                semantic_cnn_channel_dim = [num_history_time_steps * dim for dim in semantic_cnn_channel_dim]
+                semantic_cnn_to_mlp_layer_dim = [num_history_time_steps * dim for dim in semantic_cnn_to_mlp_layer_dim]
+                self.cnn_input_shape[0] *= num_history_time_steps
+                
+            # CNN for semantic map embedding
+            self.actor_semantic_embedding_cnn = CNN2D(
+                input_shape=self.cnn_input_shape,
+                channels=semantic_cnn_channel_dim,
+                kernels=semantic_cnn_kernel_sizes,
+                strides=semantic_cnn_strides,
+                activation_fn=activation_module,
+                mlp_layers=semantic_cnn_to_mlp_layer_dim
+            )
+            self.critic_semantic_embedding_cnn = CNN2D(
+                input_shape=self.cnn_input_shape,
+                channels=semantic_cnn_channel_dim,
+                kernels=semantic_cnn_kernel_sizes,
+                strides=semantic_cnn_strides,
+                activation_fn=activation_module,
+                mlp_layers=semantic_cnn_to_mlp_layer_dim
+            )
+            last_semantic_mlp_dim = semantic_cnn_to_mlp_layer_dim[-1]
+
 
         # Proprio embedding
         self.actor_proprio_embedding_mlp = MLP(
@@ -254,36 +289,21 @@ class ActorCriticBeta2DCNN(nn.Module):
             shape=proprio_layer_dim,
             actionvation_fn=activation_module,
         )
-
-        # if calculated_flattened_out_dim != flattened_out_dim:
-        #     # raise ValueError(
-        #     #     f"""The calculated CNN output size and the actual output size dont match.
-        #     #     calculated flattened output dim: {calculated_flattened_out_dim},
-        #     #     acutal flattened output dim: {flattened_out_dim}"""
-        #     # )
-        #     print(f"calculated CNN output size: {calculated_flattened_out_dim}, actual CNN output size: {flattened_out_dim}")
         
         # MLP for Navigation, with output defined for actor and critic separate
         actor_out_layers = nav_layer_dim + [num_actions * 2] # for the distribution needed (alpha and beta for each action)
         critic_out_layers = nav_layer_dim + [1] # this is just for the value function, just one value should be outputed
         
         self.actor_nav_mlp = MLP(
-            input_size=proprio_layer_dim[-1] + semantic_cnn_to_mlp_layer_dim[-1],
+            input_size=proprio_layer_dim[-1] + last_semantic_mlp_dim,
             shape=actor_out_layers,
             actionvation_fn=activation_module
         )
         self.critic_nav_mlp = MLP(
-            input_size=proprio_layer_dim[-1] + semantic_cnn_to_mlp_layer_dim[-1],
+            input_size=proprio_layer_dim[-1] + last_semantic_mlp_dim,
             shape=critic_out_layers,
             actionvation_fn=activation_module
         )
-
-        # self.actor_nav_mlp = create_mlp(
-        #     lidar_merge_mlp_layer_dim[-1] + target_cpg_layer_dim[-1], actor_out_layers, activation_module
-        # )
-        # self.critic_nav_mlp = create_mlp(
-        #     lidar_merge_mlp_layer_dim[-1] + target_cpg_layer_dim[-1], critic_out_layers, activation_module
-        # )
 
         # TODO: join to one actor and one critic to print the structure
         # print(f"Actor net: {self.actor}")
@@ -340,48 +360,22 @@ class ActorCriticBeta2DCNN(nn.Module):
     
     def actor_forward(self, x, masks=None, hidden_states=None):
         proprio_obs = x[:, :self.proprio_dim]
-        cnn_obs = x[:, self.proprio_dim:].view(x.shape[0],self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
+        
+        if hasattr(self, "parallel_CNN_process"):
+            cnn_obs = x[:, self.proprio_dim:].view(x.shape[0], self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
+            sem_embedded_future = [torch.jit.fork(cnn, cnn_obs[:, i, :, :]) for i, cnn in enumerate(self.actor_semantic_embedding_cnn)]
+            sem_embedded = torch.stack([torch.jit.wait(f) for f in sem_embedded_future])
+        else:
+            if self.num_history_time_steps > 1:
+                cnn_obs = x[:, self.proprio_dim:].view(x.shape[0], self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
+            else:
+                cnn_obs = x[:, self.proprio_dim:].view(x.shape[0], self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
+            sem_embedded = self.actor_semantic_embedding_cnn(cnn_obs)
+            proprio_embedded = self.actor_proprio_embedding_mlp(proprio_obs)
 
-        sem_embedded = self.actor_semantic_embedding_cnn(cnn_obs)
-        proprio_embedded = self.actor_proprio_embedding_mlp(proprio_obs)
-
-        input_to_nav_mlp = torch.cat((sem_embedded, proprio_embedded), dim=-1)
+            input_to_nav_mlp = torch.cat((sem_embedded, proprio_embedded), dim=-1)
 
         return self.actor_nav_mlp(input_to_nav_mlp)
-
-        # target_cpg_obs = x[..., : self.target_cpg_obs_dim]
-        # lidar_obs = x[..., self.target_cpg_obs_dim : self.target_cpg_obs_dim + self.lidar_dim * self.lidar_history_dim]
-        # lidar_obs = lidar_obs.unsqueeze(1) # channel 1 for the 2D CNN
-        # if self.lidar_extra_dim > 0:
-        #     # TODO: @vairaviv this assumes the observation vector only contains target, cpg, lidar+history 
-        #     # and pose history information in this order and is concatenated accordingly
-        #     lidar_extra_obs = x[..., -self.lidar_extra_dim:]
-
-        # # reshape the observation and embed the lidar data in CNN
-        # batch_shape = lidar_obs.shape[:-1]
-        # lidar_obs_reshaped = lidar_obs.reshape(*batch_shape, self.lidar_history_dim, self.lidar_dim)
-        # lidar_embedded_cnn = self.actor_lidar_embedding_cnn(lidar_obs_reshaped)
-        
-        # # reshape the tensor from CNN to input to MLP 
-        # lidar_embedded_cnn = lidar_embedded_cnn.view(*batch_shape, -1)
-        # lidar_embedded_mlp = self.actor_lidar_embedding_to_mlp(lidar_embedded_cnn)
-
-        # # process extra lidar observation if available
-        # if self.lidar_extra_dim > 0:
-        #     lidar_extra_embedded = self.actor_lidar_extra_mlp(lidar_extra_obs)
-        #     # merge the lidar and lidar extra embeddings
-        #     lidar_embedded_mlp = torch.cat((lidar_embedded_mlp.squeeze(1), lidar_extra_embedded), dim=-1)
-
-        # lidar_merged_embedded = self.actor_lidar_merged_mlp(lidar_embedded_mlp)
-
-        # target_cpg_embedded = self.actor_target_cpg_mlp(target_cpg_obs)
-        # # TODO: @vairaviv understand what this is used for in previous code
-        # if masks is not None:
-        #     target_cpg_embedded = unpad_trajectories(target_cpg_embedded, masks)
-
-        # # navigation output 
-        # all_combined_embedded = torch.cat((lidar_merged_embedded, target_cpg_embedded), dim=-1)
-        # return self.actor_out_mlp(all_combined_embedded)
     
     def critic_forward(self, x, masks=None, hidden_states=None):
 
@@ -395,40 +389,6 @@ class ActorCriticBeta2DCNN(nn.Module):
 
         return self.critic_nav_mlp(input_to_nav_mlp)
     
-        # target_cpg_obs = x[..., : self.target_cpg_obs_dim]
-        # lidar_obs = x[..., self.target_cpg_obs_dim : self.target_cpg_obs_dim + self.lidar_dim * self.lidar_history_dim]
-        # lidar_obs = lidar_obs.unsqueeze(1) # channel 1 for the 2D CNN
-        # if self.lidar_extra_dim > 0:
-        #     # TODO: @vairaviv this assumes the observation vector only contains target, cpg, lidar+history 
-        #     # and pose history information in this order and is concatenated accordingly
-        #     lidar_extra_obs = x[..., -self.lidar_extra_dim:]
-
-        # # reshape the observation and embed the lidar data in CNN
-        # batch_shape = lidar_obs.shape[:-1]
-        # lidar_obs_reshaped = lidar_obs.reshape(*batch_shape, self.lidar_history_dim, self.lidar_dim)
-        # lidar_embedded_cnn = self.critic_lidar_embedding_cnn(lidar_obs_reshaped)
-        
-        # # reshape the tensor from CNN to input to MLP 
-        # lidar_embedded_cnn = lidar_embedded_cnn.view(*batch_shape, -1)
-        # lidar_embedded_mlp = self.critic_lidar_embedding_to_mlp(lidar_embedded_cnn)
-
-        # # process extra lidar observation if available
-        # if self.lidar_extra_dim > 0:
-        #     lidar_extra_embedded = self.critic_lidar_extra_mlp(lidar_extra_obs)
-        #     # merge the lidar and lidar extra embeddings
-        #     lidar_embedded_mlp = torch.cat((lidar_embedded_mlp.squeeze(1), lidar_extra_embedded), dim=-1)
-
-        # lidar_merged_embedded = self.critic_lidar_merged_mlp(lidar_embedded_mlp)
-
-        # target_cpg_embedded = self.critic_target_cpg_mlp(target_cpg_obs)
-        # # TODO: @vairaviv understand what this is used for in previous code
-        # if masks is not None:
-        #     target_cpg_embedded = unpad_trajectories(target_cpg_embedded, masks)
-
-        # # navigation output 
-        # all_combined_embedded = torch.cat((lidar_merged_embedded,target_cpg_embedded), dim=-1)
-        # return self.critic_out_mlp(all_combined_embedded)
-
     def get_beta_parameters(self, logits):
         """Get alpha and beta parameters from logits"""
         ratio = self.sigmoid(logits[..., : self.output_dim] + self.beta_initial_logit_shift)
