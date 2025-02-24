@@ -17,6 +17,7 @@ from .ac_lidar_height import ActorCriticBetaRecurrentLidarHeightCnn
 from .ac_lidar_cnn import ActorCriticBetaLidarCNN
 from .ac_lidar_2D_cnn import ActorCriticBetaLidar2DCNN
 from .ac_beta_2D_cnn import ActorCriticBeta2DCNN
+from .drl_vo_nav_setup import ActorCriticDRLVONav
 
 __all__ = [
     "ActorCritic",
@@ -33,7 +34,8 @@ __all__ = [
     "ActorCriticBetaRecurrentLidarHeightCnn",
     "ActorCriticBetaLidarCNN",
     "ActorCriticBetaLidar2DCNN",
-    "ActorCriticBeta2DCNN"
+    "ActorCriticBeta2DCNN",
+    "ActorCriticDRLVONav"
 ]
 
     # Network structure Actor Critic Lidar CNN with feature alignment for target pos + proprioception:

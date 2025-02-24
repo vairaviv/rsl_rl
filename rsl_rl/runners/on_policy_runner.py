@@ -29,6 +29,7 @@ from rsl_rl.modules import (
     ActorCriticBetaLidarCNN,
     ActorCriticBetaLidar2DCNN,
     ActorCriticBeta2DCNN,
+    ActorCriticDRLVONav,
 )
 from rsl_rl.utils import store_code_state
 from rsl_rl.distribution.beta_distribution import BetaDistribution
@@ -178,6 +179,72 @@ class OnPolicyRunner:
                         lenbuffer.extend(cur_episode_length[new_ids][:, 0].cpu().numpy().tolist())
                         cur_reward_sum[new_ids] = 0
                         cur_episode_length[new_ids] = 0
+
+                    # # TODO: @vairaviv remove after debug
+                    # with torch.profiler.profile(
+                    #     activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+                    #     profile_memory=True,
+                    #     record_shapes=True,
+                    #     with_stack=True,
+                    # ) as prof:
+                    #     actions = self.alg.act(obs, critic_obs)
+                    # print(prof.key_averages().table(sort_by="self_cuda_memory_usage", row_limit=10))
+                    
+                    # # TODO: @vairaviv remove after debug
+                    # with torch.profiler.profile(
+                    #     activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+                    #     profile_memory=True,
+                    #     record_shapes=True,
+                    #     with_stack=True,
+                    # ) as prof:
+                    #     obs, rewards, dones, infos = self.env.step(actions)
+                    # print(prof.key_averages().table(sort_by="self_cuda_memory_usage", row_limit=10))
+                    
+                    # obs = self.obs_normalizer(obs)
+                    # if "critic" in infos["observations"]:
+                    #     critic_obs = self.critic_obs_normalizer(infos["observations"]["critic"])
+                    # else:
+                    #     critic_obs = obs
+                    # obs, critic_obs, rewards, dones = (
+                    #     obs.to(self.device),
+                    #     critic_obs.to(self.device),
+                    #     rewards.to(self.device),
+                    #     dones.to(self.device),
+                    # )
+
+                    # # TODO: @vairaviv remove after debug
+                    # with torch.profiler.profile(
+                    #     activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+                    #     profile_memory=True,
+                    #     record_shapes=True,
+                    #     with_stack=True,
+                    # ) as prof:
+                    #     self.alg.process_env_step(rewards, dones, infos)
+                    # print(prof.key_averages().table(sort_by="self_cuda_memory_usage", row_limit=10))
+
+                    # # TODO: @vairaviv remove after debug
+                    # with torch.profiler.profile(
+                    #     activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+                    #     profile_memory=True,
+                    #     record_shapes=True,
+                    #     with_stack=True,
+                    # ) as prof:
+                    #     if self.log_dir is not None:
+                    #         # Book keeping
+                    #         # note: we changed logging to use "log" instead of "episode" to avoid confusion with
+                    #         # different types of logging data (rewards, curriculum, etc.)
+                    #         if "episode" in infos:
+                    #             ep_infos.append(infos["episode"])
+                    #         elif "log" in infos:
+                    #             ep_infos.append(infos["log"])
+                    #         cur_reward_sum += rewards
+                    #         cur_episode_length += 1
+                    #         new_ids = (dones > 0).nonzero(as_tuple=False)
+                    #         rewbuffer.extend(cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist())
+                    #         lenbuffer.extend(cur_episode_length[new_ids][:, 0].cpu().numpy().tolist())
+                    #         cur_reward_sum[new_ids] = 0
+                    #         cur_episode_length[new_ids] = 0
+                    # print(prof.key_averages().table(sort_by="self_cuda_memory_usage", row_limit=10))
 
                 stop = time.time()
                 collection_time = stop - start
