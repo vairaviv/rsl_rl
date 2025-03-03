@@ -254,8 +254,9 @@ class ActorCriticBeta2DCNN(nn.Module):
         else:
             self.num_history_time_steps = num_history_time_steps
             if num_history_time_steps > 1:
-                semantic_cnn_channel_dim = [num_history_time_steps * dim for dim in semantic_cnn_channel_dim]
-                semantic_cnn_to_mlp_layer_dim = [num_history_time_steps * dim for dim in semantic_cnn_to_mlp_layer_dim]
+                # extend channel dimension if maps are concatenated
+                # semantic_cnn_channel_dim = [num_history_time_steps * dim for dim in semantic_cnn_channel_dim]
+                # semantic_cnn_to_mlp_layer_dim = [num_history_time_steps * dim for dim in semantic_cnn_to_mlp_layer_dim]
                 self.cnn_input_shape[0] *= num_history_time_steps
                 
             # CNN for semantic map embedding
@@ -368,18 +369,24 @@ class ActorCriticBeta2DCNN(nn.Module):
         else:
             cnn_obs = x[:, self.proprio_dim:].view(x.shape[0], self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
             sem_embedded = self.actor_semantic_embedding_cnn(cnn_obs)
-            proprio_embedded = self.actor_proprio_embedding_mlp(proprio_obs)
+        
+        proprio_embedded = self.actor_proprio_embedding_mlp(proprio_obs)
 
-            input_to_nav_mlp = torch.cat((sem_embedded, proprio_embedded), dim=-1)
+        input_to_nav_mlp = torch.cat((sem_embedded, proprio_embedded), dim=-1)
 
         return self.actor_nav_mlp(input_to_nav_mlp)
     
     def critic_forward(self, x, masks=None, hidden_states=None):
-
         proprio_obs = x[:, :self.proprio_dim]
-        cnn_obs = x[:, self.proprio_dim:].view(x.shape[0],self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
-
-        sem_embedded = self.critic_semantic_embedding_cnn(cnn_obs)
+        
+        if hasattr(self, "parallel_CNN_process"):
+            cnn_obs = x[:, self.proprio_dim:].view(x.shape[0], self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
+            sem_embedded_future = [torch.jit.fork(cnn, cnn_obs[:, i, :, :]) for i, cnn in enumerate(self.critic_semantic_embedding_cnn)]
+            sem_embedded = torch.stack([torch.jit.wait(f) for f in sem_embedded_future])
+        else:
+            cnn_obs = x[:, self.proprio_dim:].view(x.shape[0], self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
+            sem_embedded = self.critic_semantic_embedding_cnn(cnn_obs)
+        
         proprio_embedded = self.critic_proprio_embedding_mlp(proprio_obs)
 
         input_to_nav_mlp = torch.cat((sem_embedded, proprio_embedded), dim=-1)
