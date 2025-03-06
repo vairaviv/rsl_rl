@@ -30,6 +30,7 @@ from rsl_rl.modules import (
     ActorCriticBetaLidar2DCNN,
     ActorCriticBeta2DCNN,
     ActorCriticDRLVONav,
+    ActorCriticBetaSARL,
 )
 from rsl_rl.utils import store_code_state
 from rsl_rl.distribution.beta_distribution import BetaDistribution
@@ -326,6 +327,8 @@ class OnPolicyRunner:
                 self.writer.add_scalar(
                     "Train/mean_episode_length/time", statistics.mean(locs["lenbuffer"]), self.tot_time
                 )
+                if self.logger_type == "wandb":
+                    self.writer.update_video_files(log_name="Video", fps=30)
 
         str = f" \033[1m Learning iteration {locs['it']}/{locs['tot_iter']} \033[0m "
 

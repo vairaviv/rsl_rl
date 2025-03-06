@@ -165,11 +165,14 @@ class PPO:
                 value_loss = torch.max(value_losses, value_losses_clipped).mean()
             else:
                 value_loss = (returns_batch - value_batch).pow(2).mean()
+                assert not torch.isnan(value_loss).any(), "NaN detected in value_loss while update!"
 
             loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_batch.mean()
+            assert not torch.isnan(loss).any(), "NaN detected in loss while update!"
 
             # Gradient step
             self.optimizer.zero_grad()
+
             loss.backward()
             nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
             self.optimizer.step()

@@ -45,6 +45,8 @@ class WandbSummaryWriter(SummaryWriter):
 
         wandb.log({"log_dir": run_name})
 
+        self.saved_video_files = {}
+
     def store_config(self, env_cfg, runner_cfg, alg_cfg, policy_cfg):
         wandb.config.update({"runner_cfg": runner_cfg})
         wandb.config.update({"policy_cfg": policy_cfg})
@@ -76,3 +78,26 @@ class WandbSummaryWriter(SummaryWriter):
     def save_model(self, model_path, iter):
         pass
         # wandb.save(model_path)
+
+    def update_video_files(self, log_name: str, fps: int):
+        # Check if there are new video files
+        log_dir = pathlib.Path(self.log_dir)
+        video_files = list(log_dir.rglob("*.mp4"))
+        for video_file in video_files:
+            file_size_kb = os.stat(str(video_file)).st_size / 1024
+            # If it is new file
+            if str(video_file) not in self.saved_video_files:
+                self.saved_video_files[str(video_file)] = {"size": file_size_kb, "added": False, "count": 0}
+            else:
+                # Only upload if the file size is not changing anymore to avoid uploading non-ready video.
+                video_info = self.saved_video_files[str(video_file)]
+                if video_info["added"] is False and video_info["size"] == file_size_kb and file_size_kb > 100:
+                    if video_info["count"] > 10:
+                        print(f"[Wandb] Uploading {os.path.basename(str(video_file))}.")
+                        wandb.log({log_name: wandb.Video(str(video_file), fps=fps)})
+                        self.saved_video_files[str(video_file)]["added"] = True
+                    else:
+                        video_info["count"] += 1
+                else:
+                    self.saved_video_files[str(video_file)]["size"] = file_size_kb
+                    video_info["count"] = 0
