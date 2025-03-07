@@ -7,6 +7,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.nn.functional import softmax, log_softmax
 from torch.distributions import Beta
 import math
 
@@ -27,9 +28,11 @@ class ValueNetwork(nn.Module):
                  cell_size, cell_num):
         super().__init__()
         self.self_state_dim = self_state_dim
+        self_state_mlp_layer = [128]
         self.global_state_dim = mlp1_dims[-1]
         self.mlp1 = mlp(input_dim, mlp1_dims, last_relu=True)
         self.mlp2 = mlp(mlp1_dims[-1], mlp2_dims)
+        self.self_state_embedding_mlp = mlp(self_state_dim, self_state_mlp_layer)
         self.with_global_state = with_global_state
         if with_global_state:
             self.attention = mlp(mlp1_dims[-1] * 2, attention_dims)
@@ -37,7 +40,7 @@ class ValueNetwork(nn.Module):
             self.attention = mlp(mlp1_dims[-1], attention_dims)
         self.cell_size = cell_size
         self.cell_num = cell_num
-        mlp3_input_dim = mlp2_dims[-1] + self.self_state_dim
+        mlp3_input_dim = mlp2_dims[-1] + self.self_state_dim  # self_state_mlp_layer[-1]  #
         self.mlp3 = mlp(mlp3_input_dim, mlp3_dims)
         self.attention_weights = None
 
@@ -53,9 +56,9 @@ class ValueNetwork(nn.Module):
         assert not torch.isnan(state).any(), "NaN detected in input state before mlp1!"
         assert not torch.isinf(state).any(), "Inf detected in input state before mlp1!"
         
-        state += 1e-6
-        print(state)
-        
+        # state += 1e-6
+        # print(state)
+
         mlp1_output = self.mlp1(state.reshape((-1, size[2])))
         assert not torch.isnan(mlp1_output).any(), "NaN detected in mlp1 output!"
 
@@ -71,11 +74,27 @@ class ValueNetwork(nn.Module):
             attention_input = mlp1_output
         scores = self.attention(attention_input).reshape(size[0], size[1], 1).squeeze(dim=2)
         assert not torch.isnan(scores).any(), "NaN detected in attention output!"
+        assert not torch.isinf(scores).any(), "Inf detected in attention output!"
 
         # masked softmax
-        # weights = softmax(scores, dim=1).unsqueeze(2)
+        weights_softmax = softmax(scores, dim=1).unsqueeze(2)
+        
         scores_exp = torch.exp(scores) * (scores != 0).float()
-        weights = (scores_exp / torch.sum(scores_exp, dim=1, keepdim=True)).unsqueeze(2)
+        weights_non_shifted = (scores_exp / (torch.sum(scores_exp, dim=1, keepdim=True)+ 1e-8)).unsqueeze(2)
+
+        max_values, _ = torch.max(scores, dim=-1, keepdim=True)
+        scores = scores - max_values
+        scores_exp = torch.exp(scores) * (scores != 0).float()
+        assert not torch.isnan(scores_exp).any(), "NaN detected in scores_exp output!"
+        assert not torch.isinf(scores_exp).any(), "Inf detected in scores_exp output!"
+        weights = (scores_exp / (torch.sum(scores_exp, dim=1, keepdim=True) + 1e-8)).unsqueeze(2)
+
+        print(f"weights_softmax (torch) maximum is: {weights_softmax.max().item()}")
+        print(f"weights maximum is: {weights.max().item()}")
+        print(f"weights_non_shifted maximum is: {weights_non_shifted.max().item()}")
+        # scores = scores - torch.max(scores, dim=-1)
+        # scores_exp = torch.exp(scores) * (scores != 0).float()
+        # weights = (scores_exp / torch.sum(scores_exp, dim=1, keepdim=True)).unsqueeze(2)
         self.attention_weights = weights[0, :, 0].data.cpu().numpy()
         assert not np.isnan(self.attention_weights).any(), "NaN detected in attention_weights!"
 
@@ -86,6 +105,9 @@ class ValueNetwork(nn.Module):
         weighted_feature = torch.sum(torch.mul(weights, features), dim=1)
         assert not torch.isnan(weighted_feature).any(), "NaN detected in weighted_feature output!"
 
+        # TODO: @vairaviv tried to bring robot state into latent space instead of directly feeding it to mlp
+        # self_state = self.self_state_embedding_mlp(self_state)
+        
         # concatenate agent's state with global weighted humans' state
         joint_state = torch.cat([self_state, weighted_feature], dim=1)
         assert not torch.isnan(joint_state).any(), "NaN detected in joint_state output!"
