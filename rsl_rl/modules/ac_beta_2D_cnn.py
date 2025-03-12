@@ -69,7 +69,7 @@ class CNN2D(nn.Module):
         self.fc = MLP(dummy_output.shape[1], mlp_layers, activation_fn, 1.0 / float(math.sqrt(2)))
 
     def forward(self, x):
-        x = x.view(-1, self.input_shape[0], self.input_shape[1], self.input_shape[2])
+        x = x.reshape(-1, self.input_shape[0], self.input_shape[1], self.input_shape[2])
         x = self.conv_module(x)
         x = torch.flatten(x, 1)  # flatten all dimensions except batch
         x = self.fc(x)
@@ -363,11 +363,11 @@ class ActorCriticBeta2DCNN(nn.Module):
         proprio_obs = x[:, :self.proprio_dim]
         
         if hasattr(self, "parallel_CNN_process"):
-            cnn_obs = x[:, self.proprio_dim:].view(x.shape[0], self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
+            cnn_obs = x[:, self.proprio_dim:].reshape(x.shape[0], self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
             sem_embedded_future = [torch.jit.fork(cnn, cnn_obs[:, i, :, :]) for i, cnn in enumerate(self.actor_semantic_embedding_cnn)]
             sem_embedded = torch.stack([torch.jit.wait(f) for f in sem_embedded_future])
         else:
-            cnn_obs = x[:, self.proprio_dim:].view(x.shape[0], self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
+            cnn_obs = x[:, self.proprio_dim:].reshape(x.shape[0], self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
             sem_embedded = self.actor_semantic_embedding_cnn(cnn_obs)
         
         proprio_embedded = self.actor_proprio_embedding_mlp(proprio_obs)
@@ -380,11 +380,11 @@ class ActorCriticBeta2DCNN(nn.Module):
         proprio_obs = x[:, :self.proprio_dim]
         
         if hasattr(self, "parallel_CNN_process"):
-            cnn_obs = x[:, self.proprio_dim:].view(x.shape[0], self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
+            cnn_obs = x[:, self.proprio_dim:].reshape(x.shape[0], self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
             sem_embedded_future = [torch.jit.fork(cnn, cnn_obs[:, i, :, :]) for i, cnn in enumerate(self.critic_semantic_embedding_cnn)]
             sem_embedded = torch.stack([torch.jit.wait(f) for f in sem_embedded_future])
         else:
-            cnn_obs = x[:, self.proprio_dim:].view(x.shape[0], self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
+            cnn_obs = x[:, self.proprio_dim:].reshape(x.shape[0], self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
             sem_embedded = self.critic_semantic_embedding_cnn(cnn_obs)
         
         proprio_embedded = self.critic_proprio_embedding_mlp(proprio_obs)
