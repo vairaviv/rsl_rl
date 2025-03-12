@@ -31,6 +31,7 @@ from rsl_rl.modules import (
     ActorCriticBeta2DCNN,
     ActorCriticDRLVONav,
     ActorCriticBetaSARL,
+    ActorCriticBetaSOADRL,
 )
 from rsl_rl.utils import store_code_state
 from rsl_rl.distribution.beta_distribution import BetaDistribution
