@@ -12,11 +12,11 @@ import math
 
 
 class MLP(nn.Module):
-    def __init__(self, input_size, shape, actionvation_fn, init_scale=2.0):
+    def __init__(self, input_size, shape, actionvation_fn, init_scale=2.0, add_activation_fn_at_end: bool = False):
         super(MLP, self).__init__()
         self.activation_fn = actionvation_fn
 
-        if len(shape) == 1:
+        if len(shape) == 1 and not add_activation_fn_at_end:
             modules = [nn.Linear(input_size, shape[0])]
         else:
             modules = [nn.Linear(input_size, shape[0]), self.activation_fn]
@@ -25,7 +25,7 @@ class MLP(nn.Module):
 
         for idx in range(len(shape) - 1):
             modules.append(nn.Linear(shape[idx], shape[idx + 1]))
-            if idx < len(shape)-2:
+            if idx < len(shape)-2 or add_activation_fn_at_end:
                 modules.append(self.activation_fn)
                 scale.append(init_scale)
 
@@ -49,14 +49,33 @@ class MLP(nn.Module):
 
 
 class CNN2D(nn.Module):
-    def __init__(self, input_shape, channels, mlp_layers, activation_fn, kernels, strides, groups=1):
+    def __init__(
+        self, 
+        input_shape, 
+        channels, 
+        mlp_layers, 
+        activation_fn, 
+        kernels, 
+        strides, 
+        num_history_time_steps,
+        max_pooling=False, 
+        groups=1,
+        add_activation_fn_at_end=False,
+    ):
         super().__init__()
         # input_shape = input_shape.permute(0, 3, 2, 1)
+        self.max_pooling = max_pooling
         modules = [nn.Conv2d(input_shape[0], channels[0], kernels[0], strides[0], groups=groups), activation_fn]
 
+        if groups > 1:
+            self.groups = groups
+            self.num_history = num_history_time_steps
+            self.sem_channels = int(input_shape[0] / self.num_history)
         for idx in range(len(channels) - 1):
             modules.append(nn.Conv2d(channels[idx], channels[idx + 1], kernels[idx + 1], strides[idx + 1], groups=groups))
             modules.append(activation_fn)
+            if max_pooling:
+                modules.append(nn.MaxPool2d(kernel_size=2, stride=2))
 
         # modules.append(nn.Conv2d(channels[-1], channels[-1], 2, 2))
 
@@ -66,10 +85,23 @@ class CNN2D(nn.Module):
         dummy_input = torch.zeros(1, input_shape[0], input_shape[1], input_shape[2])
         dummy_output = self.conv_module(dummy_input).view(1, -1)
 
-        self.fc = MLP(dummy_output.shape[1], mlp_layers, activation_fn, 1.0 / float(math.sqrt(2)))
+        self.fc = MLP(dummy_output.shape[1], mlp_layers, activation_fn, 1.0 / float(math.sqrt(2)), add_activation_fn_at_end)
 
     def forward(self, x):
-        x = x.reshape(-1, self.input_shape[0], self.input_shape[1], self.input_shape[2])
+        try:
+            if self.groups > 1 and self.groups == self.input_shape[0]/self.num_history:
+                # reshape and bring it into order for CNN to group the channels by the time
+                x = x.reshape(-1, self.num_history, self.sem_channels, self.input_shape[1], self.input_shape[2])
+                x = x.permute(0, 2, 1, 3, 4)
+                x = x.reshape(-1, self.input_shape[0], self.input_shape[1], self.input_shape[2])
+            elif self.groups > 1:
+                ValueError(
+                    f"""[ERROR]: Tried to group input Channels in CNN2D to {self.groups}, \n
+                    but num_history is {self.num_history}, \n
+                    and input_channels are {self.input_shape[0]}"""
+                )
+        except AttributeError:
+            x = x.reshape(-1, self.input_shape[0], self.input_shape[1], self.input_shape[2])
         x = self.conv_module(x)
         x = torch.flatten(x, 1)  # flatten all dimensions except batch
         x = self.fc(x)
@@ -165,6 +197,8 @@ class ActorCriticBeta2DCNN(nn.Module):
             activation: str = "elu",
             num_history_time_steps: int = 1,
             parallel_CNN_process: bool = False,
+            max_pooling: bool = False,
+            group_channels: int = 1,
             beta_initial_logit: float = 0.5,  # centered mean initially
             beta_initial_scale: float = 5.0,  # sharper distribution initially
             **kwargs,
@@ -202,7 +236,8 @@ class ActorCriticBeta2DCNN(nn.Module):
                         kernels=semantic_cnn_kernel_sizes,
                         strides=semantic_cnn_strides,
                         activation_fn=activation_module,
-                        mlp_layers=semantic_cnn_to_mlp_layer_dim
+                        mlp_layers=semantic_cnn_to_mlp_layer_dim,
+                        max_pooling=max_pooling,
                     )
                 )
                 self.critic_semantic_embedding_cnn.append(
@@ -212,7 +247,8 @@ class ActorCriticBeta2DCNN(nn.Module):
                         kernels=semantic_cnn_kernel_sizes,
                         strides=semantic_cnn_strides,
                         activation_fn=activation_module,
-                        mlp_layers=semantic_cnn_to_mlp_layer_dim
+                        mlp_layers=semantic_cnn_to_mlp_layer_dim,
+                        max_pooling=max_pooling
                     )
                 )
                 # setattr(
@@ -266,7 +302,11 @@ class ActorCriticBeta2DCNN(nn.Module):
                 kernels=semantic_cnn_kernel_sizes,
                 strides=semantic_cnn_strides,
                 activation_fn=activation_module,
-                mlp_layers=semantic_cnn_to_mlp_layer_dim
+                mlp_layers=semantic_cnn_to_mlp_layer_dim,
+                max_pooling=max_pooling,
+                num_history_time_steps=num_history_time_steps,
+                groups=group_channels,
+                add_activation_fn_at_end=True,
             )
             self.critic_semantic_embedding_cnn = CNN2D(
                 input_shape=self.cnn_input_shape,
@@ -274,7 +314,11 @@ class ActorCriticBeta2DCNN(nn.Module):
                 kernels=semantic_cnn_kernel_sizes,
                 strides=semantic_cnn_strides,
                 activation_fn=activation_module,
-                mlp_layers=semantic_cnn_to_mlp_layer_dim
+                mlp_layers=semantic_cnn_to_mlp_layer_dim,
+                max_pooling=max_pooling,
+                num_history_time_steps=num_history_time_steps,
+                groups=group_channels,
+                add_activation_fn_at_end=True,
             )
             last_semantic_mlp_dim = semantic_cnn_to_mlp_layer_dim[-1]
 
@@ -284,11 +328,13 @@ class ActorCriticBeta2DCNN(nn.Module):
             input_size=self.proprio_dim,
             shape=proprio_layer_dim,
             actionvation_fn=activation_module,
+            add_activation_fn_at_end=True,
         )
         self.critic_proprio_embedding_mlp = MLP(
             input_size=self.proprio_dim,
             shape=proprio_layer_dim,
             actionvation_fn=activation_module,
+            add_activation_fn_at_end=True,
         )
         
         # MLP for Navigation, with output defined for actor and critic separate

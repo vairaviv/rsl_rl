@@ -80,7 +80,7 @@ class ValueNetwork(nn.Module):
         weights_softmax = softmax(scores, dim=1).unsqueeze(2)
         
         scores_exp = torch.exp(scores) * (scores != 0).float()
-        weights_non_shifted = (scores_exp / (torch.sum(scores_exp, dim=1, keepdim=True)+ 1e-8)).unsqueeze(2)
+        weights_non_shifted = (scores_exp / (torch.sum(scores_exp, dim=1, keepdim=True) + 1e-8)).unsqueeze(2)
 
         max_values, _ = torch.max(scores, dim=-1, keepdim=True)
         scores = scores - max_values
@@ -89,20 +89,20 @@ class ValueNetwork(nn.Module):
         assert not torch.isinf(scores_exp).any(), "Inf detected in scores_exp output!"
         weights = (scores_exp / (torch.sum(scores_exp, dim=1, keepdim=True) + 1e-8)).unsqueeze(2)
 
-        print(f"weights_softmax (torch) maximum is: {weights_softmax.max().item()}")
-        print(f"weights maximum is: {weights.max().item()}")
-        print(f"weights_non_shifted maximum is: {weights_non_shifted.max().item()}")
+        # print(f"weights_softmax (torch) maximum is: {weights_softmax.max().item()}")
+        # print(f"weights maximum is: {weights.max().item()}")
+        # print(f"weights_non_shifted maximum is: {weights_non_shifted.max().item()}")
         # scores = scores - torch.max(scores, dim=-1)
         # scores_exp = torch.exp(scores) * (scores != 0).float()
         # weights = (scores_exp / torch.sum(scores_exp, dim=1, keepdim=True)).unsqueeze(2)
-        self.attention_weights = weights[0, :, 0].data.cpu().numpy()
+        self.attention_weights = weights_softmax[0, :, 0].data.cpu().numpy()
         assert not np.isnan(self.attention_weights).any(), "NaN detected in attention_weights!"
 
         # output feature is a linear combination of input features
         features = mlp2_output.reshape(size[0], size[1], -1)
         # for converting to onnx
         # expanded_weights = torch.cat([torch.zeros(weights.size()).copy_(weights) for _ in range(50)], dim=2)
-        weighted_feature = torch.sum(torch.mul(weights, features), dim=1)
+        weighted_feature = torch.sum(torch.mul(weights_softmax, features), dim=1)
         assert not torch.isnan(weighted_feature).any(), "NaN detected in weighted_feature output!"
 
         # TODO: @vairaviv tried to bring robot state into latent space instead of directly feeding it to mlp
