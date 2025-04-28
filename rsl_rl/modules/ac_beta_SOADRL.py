@@ -75,7 +75,7 @@ def create_cnn(
 
 class ValueNetwork(nn.Module):
     def __init__(self, interaction_dim, self_state_dim, am_dim, num_humans, mlp1_dims, mlp2_dims, mlp3_dims, ang_map_mlp_dim, attention_dims, with_global_state,
-                 cell_size, cell_num):
+                 cell_size, cell_num, pretrained_path=None):
         super().__init__()
         self.self_state_dim = self_state_dim
         self.ang_map_dim = am_dim
@@ -97,6 +97,32 @@ class ValueNetwork(nn.Module):
         mlp3_input_dim = mlp2_dims[-1] + self.self_state_dim + ang_map_mlp_dim[-1] # self_state_mlp_layer[-1]  #
         self.mlp3 = mlp(mlp3_input_dim, mlp3_dims)
         self.attention_weights = None
+
+        # load pretrained CrwodNav model
+        if pretrained_path is not None:
+            self.load_pretrained_weights(pretrained_path)
+
+    def load_pretrained_weights(self, pretrained_path):
+        """Loads pretrained weights and freezes all layers except `angular_map_embedding_mlp`."""
+        pretrained_weights = torch.load(pretrained_path, map_location="cpu")
+        self.load_state_dict(pretrained_weights, strict=False)  # strict=False allows missing layers
+        
+        # Freeze all layers except angular_map_embedding_mlp
+        for name, param in self.named_parameters():
+            if "angular_map_embedding_mlp" in name or "mlp3" in name:
+                param.requires_grad = True  # Keep these layers trainable
+            else:
+                param.requires_grad = False  # Freeze all other layers
+        
+        # Reinitialize angular_map_embedding_mlp
+        self.angular_map_embedding_mlp.apply(self.initialize_weights)
+
+    def initialize_weights(self, m):
+        """Custom weight initialization function."""
+        if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
+            nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
 
     def forward(self, state):
         """
@@ -195,6 +221,7 @@ class ActorCriticBetaSOADRL(nn.Module):
         cell_size=1.0,
         cell_num=4**2,
         am_dim=72,
+        pretrained_path=None,
         with_global_state=True,
         mlp1_dims=[256, 256, 256],
         mlp2_dims=[256, 256, 256],
@@ -231,6 +258,7 @@ class ActorCriticBetaSOADRL(nn.Module):
             with_global_state=with_global_state,
             cell_size=cell_size,
             cell_num=cell_num,
+            pretrained_path=pretrained_path,
         )
         self.critic = ValueNetwork(
             interaction_dim=self.num_interaction_obs,
@@ -245,10 +273,15 @@ class ActorCriticBetaSOADRL(nn.Module):
             with_global_state=with_global_state,
             cell_size=cell_size,
             cell_num=cell_num,
+            pretrained_path=pretrained_path,
         )
 
         print(f"Actor MLP: {self.actor}")
         print(f"Critic MLP: {self.critic}")
+        print(f"total num params: {sum(p.numel() for p in self.parameters())}")
+        print(f"Actor num params: {sum(p.numel() for p in self.actor.parameters())}")
+        for name, param in self.named_parameters():
+            print(f"{name}: requires_grad = {param.requires_grad}")
 
         # Action noise
         self.distribution = Beta(1, 1)

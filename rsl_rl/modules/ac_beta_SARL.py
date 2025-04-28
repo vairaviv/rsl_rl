@@ -235,7 +235,19 @@ class ActorCriticBetaSARL(nn.Module):
 
     def update_distribution(self, observations):
         """Update the distribution of the policy"""
-        observations = observations.reshape(-1, self.num_humans, self.num_actor_obs)
+        if self.num_humans > observations.shape[0]:
+            raise ValueError(
+                f"""[ERROR]: Provided num_humans: {self.num_humans} in 'PPOBaseBetaSOADRLCfg' is greater than num_env deployed.
+                            Please check the config file or increase the num_envs."""
+            )
+        #observations = observations.reshape(-1, self.num_humans, self.num_actor_obs)
+        observations = observations.reshape(observations.shape[0], -1, self.num_actor_obs)
+        if observations.shape[1] != self.num_humans:
+            raise ValueError(
+                f"""[ERROR]: Provided num_humans: {self.num_humans} in 'PPOBaseBetaSOADRLCfg' is not equal to the number of humans in the observation.
+                            Please check the config file or the observation config, got {observations.shape[1]} humans in the observation."""
+            )
+
         logits = self.actor(observations)
         alpha, beta = self.get_beta_parameters(logits)
 
@@ -250,7 +262,8 @@ class ActorCriticBetaSARL(nn.Module):
         return self.distribution.log_prob(actions).sum(dim=-1)
 
     def act_inference(self, observations):
-        observations = observations.reshape(-1, self.num_humans, self.num_actor_obs)
+        # observations = observations.reshape(-1, self.num_humans, self.num_actor_obs)
+        observations = observations.reshape(observations.shape[0], -1, self.num_actor_obs)
         logits = self.actor(observations)
         actions_mean = self.sigmoid(logits[:, : self.output_dim] + self.beta_initial_logit_shift)
         return actions_mean
