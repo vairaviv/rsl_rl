@@ -413,7 +413,11 @@ class ActorCriticBeta2DCNN(nn.Module):
             sem_embedded_future = [torch.jit.fork(cnn, cnn_obs[:, i, :, :]) for i, cnn in enumerate(self.actor_semantic_embedding_cnn)]
             sem_embedded = torch.stack([torch.jit.wait(f) for f in sem_embedded_future])
         else:
-            cnn_obs = x[:, self.proprio_dim:].reshape(x.shape[0], self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
+            try:
+                cnn_obs = x[:, self.proprio_dim:].reshape(x.shape[0], self.cnn_input_shape[0], self.cnn_input_shape[1], self.cnn_input_shape[2])
+            except RuntimeError:
+                raise RuntimeError(f"""check if your configurations are correct, most likely mistake in observations config,
+                                  expected input shape {self.cnn_input_shape} but got {x.shape}""")
             sem_embedded = self.actor_semantic_embedding_cnn(cnn_obs)
         
         proprio_embedded = self.actor_proprio_embedding_mlp(proprio_obs)
